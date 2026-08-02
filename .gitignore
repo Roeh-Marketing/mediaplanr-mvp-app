@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# Secrets — never commit.
+#
+# The Anthropic API key lives in ~/.Renviron, which sits OUTSIDE this repo and
+# so is never at risk. These rules exist for the other case: a copy created
+# inside the working tree and staged by accident.
+# ---------------------------------------------------------------------------
+.Renviron
+.Rprofile
+.env
+.env.*
+*.pem
+*.key
+secrets.*
+
+# R session artifacts
+.Rhistory
+.Rapp.history
+.RData
+.RDataTmp
+.Ruserdata
+
+# RStudio / IDE
+*.Rproj
+.Rproj.user/
+.positai/
+
+# R CMD build / check output
+*-Ex.R
+/*.tar.gz
+/*.Rcheck/
+
+# Package build artifacts
+/doc/
+/Meta/
+inst/doc
+
+# knitr / R Markdown cache
+*_cache/
+/cache/
+*.utf8.md
+*.knit.md
+
+# renv library (lockfile is committed, the library is not)
+renv/library/
+renv/staging/
+renv/python/
+
+# Shiny / app runtime
+rsconnect/
+shiny-bookmarks/
+
+# Files the app writes at runtime
+data/*.xlsx
+!data/sample_media_plan.csv
+
+# macOS
+.DS_Store
+
+# Local dev scratch
+dev_*.R
+dev_*.rds
+Rplots.pdf

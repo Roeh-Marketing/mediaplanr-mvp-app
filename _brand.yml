@@ -1,0 +1,94 @@
+#  _brand.yml – Ro-eh Marketing
+#  Unified brand spec for Shiny (R + Python) and Quarto via brand.yml.
+#  Drop this file in your app/project root (or the same folder as app.py / app.R / .qmd).
+#
+#  Shiny for R     : ui <- page_sidebar(theme = bs_theme(brand = TRUE))   # bslib >= 0.9.0
+#  Shiny for Python: theme = ui.Theme.from_brand(Path(__file__))
+#  Quarto (>=1.6)  : auto-detected when named _brand.yml in the project
+#
+#  Works best with Bootstrap 5.
+
+meta:
+  name: Ro-eh Marketing
+  link:
+    home: https://roehmarketing.com
+
+logo:
+  # Place the SVGs from the logo pack alongside this file (e.g. in a logos/ folder).
+  small: logos/hex_badge_midnight.svg          # favicon / avatar
+  medium: logos/lockup_stacked_midnight.svg    # navbar on dark surfaces
+  large: logos/lockup_horizontal_midnight.svg  # hero / splash
+
+color:
+  palette:
+    # --- Ro-eh brand colors ---
+    midnight: "#15233F"   # deep night sky – primary
+    slate:    "#3A4A6B"   # secondary
+    stone:    "#E8D8B8"   # Jerusalem stone, light strokes
+    sand:     "#C9A86A"   # warm accent
+    lamp-gold: "#E5B94E"  # the point of vision – highlight, use sparingly
+    cream:    "#FBF6EC"   # page background
+    ink:      "#2C2C2A"   # body text
+
+    # --- Bootstrap-named aliases (picked up automatically by themed components/plots) ---
+    blue:   midnight
+    indigo: slate
+    yellow: lamp-gold
+    orange: sand
+
+  # --- Semantic roles ---
+  foreground: ink
+  background: cream
+  primary:    midnight
+  secondary:  slate
+  success:    "#3B6D11"
+  info:       slate
+  warning:    lamp-gold
+  danger:     "#A32D2D"
+  light:      stone
+  dark:       midnight
+
+typography:
+  fonts:
+    # Google-hosted stand-ins for the brand fonts (no local install needed).
+    # For finished brand work, swap headings to Freight Text and base to Söhne / Neue Haas
+    # via `source: file` once those are licensed.
+    - family: Lora            # humanist serif – headlines + wordmark voice
+      source: google
+      weight: [400, 500, 600, 700]
+      style: [normal, italic]
+    - family: Inter           # clean grotesque sans – body
+      source: google
+      weight: [300, 400, 500, 600]
+      style: [normal, italic]
+    - family: Fira Code       # monospace
+      source: google
+      weight: [400, 500]
+
+  base:
+    family: Inter
+    weight: 400
+    line-height: 1.6
+    size: 1rem
+
+  headings:
+    family: Lora
+    weight: 600
+    color: primary
+    line-height: 1.2
+
+  monospace:
+    family: Fira Code
+    size: 0.9em
+
+  link:
+    color: sand
+    decoration: underline
+
+# --- Optional Bootstrap variable overrides for finer control (bslib / Shiny / Quarto-html) ---
+defaults:
+  bootstrap:
+    defaults:
+      navbar-bg: "#15233F"
+      border-radius: "0.5rem"
+      card-border-color: "#E8D8B8"

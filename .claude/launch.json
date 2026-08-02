@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mediaplanr-app",
+      "runtimeExecutable": "Rscript",
+      "runtimeArgs": ["-e", "shiny::runApp('.', port = 7788, launch.browser = FALSE, host = '127.0.0.1')"],
+      "port": 7788
+    }
+  ]
+}

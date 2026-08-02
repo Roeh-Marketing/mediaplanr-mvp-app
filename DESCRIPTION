@@ -1,0 +1,28 @@
+Package: mediaplanrapp
+Title: Media Plan Workbench
+Version: 0.1.0
+Type: App
+Description: Build, edit and compare media plans. Upload a plan, reshape it in a
+    spreadsheet-style grid or by asking an assistant, fork named scenarios off
+    it, and compare them as tables and charts. All plan semantics come from the
+    mediaplanr package; this app does no modelling.
+Authors@R: person("Ben", "Shaffer", email = "shafferbendenis@gmail.com", role = c("aut", "cre"))
+License: MIT
+Imports:
+    shiny,
+    bslib,
+    brand.yml,
+    shinychat,
+    ellmer,
+    mediaplanr,
+    reactable,
+    ggplot2,
+    scales,
+    jsonlite,
+    purrr,
+    promises,
+    readxl,
+    writexl,
+    base64enc,
+    htmltools
+Encoding: UTF-8
