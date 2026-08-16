@@ -22,11 +22,14 @@ nav_panel(
       uiOutput("scn_target_inputs"),
       layout_columns(
         col_widths = c(5, 7),
-        selectInput("op_kind", "Do", choices = c(
-          "scale by"   = "scale",
-          "add"        = "delta",
-          "set each to" = "set",
-          "make total" = "total")),
+        selectInput("op_kind", "Do", choices = list(
+          "Across the matched rows" = c(
+            "make total"      = "total",
+            "add to total"    = "delta",
+            "scale by"        = "scale"),
+          "To each matched row" = c(
+            "set each to"     = "set",
+            "add to each"     = "delta_each"))),
         numericInput("op_value", "Value", value = 1.1, step = 0.1)
       ),
       div(class = "form-text mb-2 mt-n2", textOutput("op_hint", inline = TRUE)),

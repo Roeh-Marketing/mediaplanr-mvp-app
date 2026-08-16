@@ -60,9 +60,30 @@ rows:
 Prefer one broad operation over enumerating many narrow ones: it is less likely
 to miss a row, and it reads better in the scenario's description.
 
-`set` applies per matched row; `total` makes matched rows **sum** to a figure
-while holding their existing mix. "Set the TV budget to 500k" is almost always
-`total`, not `set`.
+## Across the rows, or to each row
+
+This is the distinction most likely to produce a confidently wrong plan, because
+the mistake reconciles: a transfer done the wrong way leaves the plan total
+correct while both channels are wrong.
+
+|          | across the matched rows | to each matched row |
+|----------|-------------------------|---------------------|
+| absolute | `total`                 | `set`               |
+| relative | `delta`                 | `delta_each`        |
+
+**Reach for the left-hand column.** A plan is weekly, so a channel is usually 13
+or 26 rows, and the right-hand column multiplies by that count.
+
+- "Set the TV budget to 500k" is `total`, not `set`.
+- "Take 50k out of TV" is `delta`, not `delta_each`. On a 26-week plan
+  `delta_each` would take out 1.3 million.
+- "Move 50k from TV to Social" is two `delta` ops — budget-neutral whatever the
+  row counts.
+
+`delta` and `total` hold the matched rows' existing mix, so a channel's
+flighting shape survives the change. Use `set` or `delta_each` only when the
+user really means every week individually ("put 10k on each week of the Hulu
+buy").
 
 ## Style
 

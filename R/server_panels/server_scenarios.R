@@ -69,17 +69,18 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
   })
 
   output$op_hint <- renderText({
-    switch(input$op_kind %||% "scale",
-      scale = "1.2 raises matched rows 20%; 0.5 halves them.",
-      delta = "Added to each matched row. Negative to cut.",
-      set   = "Each matched row becomes exactly this.",
-      total = "Matched rows are rescaled to sum to this, keeping their mix.")
+    switch(input$op_kind %||% "total",
+      scale      = "1.2 raises matched rows 20%; 0.5 halves them.",
+      delta      = "Moves the matched rows' TOTAL by this, keeping their mix. Negative to cut.",
+      set        = "Every matched row becomes exactly this -- so the total is this times the row count.",
+      delta_each = "Added to EVERY matched row -- so the total moves by this times the row count.",
+      total      = "Matched rows are rescaled to sum to this, keeping their mix.")
   })
 
   observeEvent(input$op_kind, {
     updateNumericInput(session, "op_value",
-      value = switch(input$op_kind, scale = 1.1, delta = 10000,
-                     set = 25000, total = 500000),
+      value = switch(input$op_kind, scale = 1.1, delta = 50000,
+                     delta_each = 5000, set = 25000, total = 500000),
       step = switch(input$op_kind, scale = 0.05, 5000))
   })
 
