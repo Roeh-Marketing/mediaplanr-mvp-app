@@ -208,22 +208,58 @@ server_plan <- function(input, output, session, st, bump, uploaded) {
     }
     p  <- store_base(st)
     d  <- p@data
-    li <- length(unique(mediaplanr::line_item(d, mediaplanr::line_item_grain(p))))
-    nw <- if (length(p@week_col)) length(unique(d[[p@week_col]])) else 0
+    lg <- setdiff(mediaplanr::line_item_grain(p), mediaplanr::flight_cols())
+    li <- length(unique(mediaplanr::line_item(d, lg)))
+    fl <- nrow(mediaplanr::flights(p))
+    win <- mediaplanr::flight_window(p)
 
-    kpi <- function(label, value) {
+    kpi <- function(label, value, sub = NULL) {
       card(class = "border-0 shadow-sm",
            card_body(class = "py-3",
                      div(class = "kpi-label", label),
-                     div(class = "kpi-value", value)))
+                     div(class = "kpi-value", value),
+                     if (!is.null(sub)) div(class = "small text-muted", sub)))
     }
-    layout_columns(
-      col_widths = c(3, 3, 3, 3),
+
+    # "Weeks" was a count of the storage grain. The window is what a planner
+    # actually asks -- when is this in market -- and it is the plan's own
+    # extent, so it stays true however the plan was authored.
+    in_market <- if (length(win)) {
+      kpi("In market",
+          paste0(format(win[["start"]], "%d %b"), " - ", format(win[["end"]], "%d %b")),
+          paste0(p@flight_days, " days",
+                 if (!is.na(mediaplanr::week_start(p)))
+                   paste0(" - ", mediaplanr::week_start(p), " weeks") else ""))
+    } else {
+      kpi("In market", "—", "no time dimension")
+    }
+
+    # Only shown when the plan records them, in the same "omit rather than show
+    # empty" spirit the package's own print method uses.
+    units_kpi <- NULL
+    if (all(c("unit_type", "planned_units") %in% names(d))) {
+      ok <- !is.na(d$unit_type) & !is.na(d$planned_units)
+      if (any(ok)) {
+        ut <- as.character(d$unit_type)[ok]
+        tot <- tapply(d$planned_units[ok], ut, sum)
+        big <- names(tot)[which.max(tot)]
+        sp  <- sum(d$planned_spend[ok & d$unit_type == big])
+        per <- if (tolower(big) %in% c("impression", "impressions")) 1000 else 1
+        units_kpi <- kpi(
+          tools::toTitleCase(big),
+          fmt_units(tot[[big]]),
+          paste0(fmt_rate(sp / tot[[big]] * per), if (per == 1000) " CPM" else " each"))
+      }
+    }
+
+    cells <- c(list(
       kpi("Total planned", fmt_money(sum(d$planned_spend))),
-      kpi("Line items", li),
-      kpi("Weeks", if (nw) nw else "—"),
-      kpi("Rows", nrow(d))
-    )
+      kpi("Line items", li, if (fl) paste0(fl, " flight", if (fl == 1) "" else "s") else NULL),
+      in_market,
+      kpi("Rows", nrow(d))), if (!is.null(units_kpi)) list(units_kpi))
+    n <- length(cells)
+    do.call(layout_columns,
+            c(list(col_widths = if (n == 5) c(3, 2, 3, 1, 3) else c(3, 3, 3, 3)), cells))
   })
 
   output$plan_preview <- reactable::renderReactable({

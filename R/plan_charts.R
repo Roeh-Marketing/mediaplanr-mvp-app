@@ -76,7 +76,7 @@ chart_totals <- function(set, scenarios = NULL) {
 # --- 2. mix ------------------------------------------------------------------
 chart_mix <- function(set, scenarios = NULL, by = NULL) {
   cmp <- .set_long(set, scenarios)
-  by <- by %||% setdiff(set@grain, .week_col_of(set))[1]
+  by <- by %||% .dim_cols(set)[1]
   if (is.na(by) || !by %in% names(cmp)) by <- set@grain[1]
 
   agg <- stats::aggregate(cmp$planned_spend,
@@ -96,26 +96,47 @@ chart_mix <- function(set, scenarios = NULL, by = NULL) {
 }
 
 # --- 3. flighting ------------------------------------------------------------
-chart_flighting <- function(set, scenarios = NULL) {
-  wk <- .week_col_of(set)
-  if (is.null(wk)) return(NULL)
-  cmp <- .set_long(set, scenarios)
-  cmp[[wk]] <- as.Date(cmp[[wk]])
+# Spend over time, cut onto a real calendar rather than onto the plan's storage
+# grain. calendarize() spreads each row across the days it is actually in market
+# before gathering, so a buy that starts mid-week contributes a part week
+# instead of showing as a dip nobody planned, and a month view splits a week
+# that straddles the boundary.
+chart_flighting <- function(set, scenarios = NULL, basis = "week") {
+  if (is.null(.week_col_of(set))) return(NULL)
+  nms <- names(set@scenarios)
+  if (!is.null(scenarios)) nms <- intersect(nms, scenarios)
+  if (!length(nms)) return(NULL)
+
+  parts <- lapply(nms, function(nm) {
+    tbl <- try(mediaplanr::calendarize(set@scenarios[[nm]], basis), silent = TRUE)
+    if (inherits(tbl, "try-error")) return(NULL)
+    data.frame(scenario = nm, period = tbl[[basis]],
+               planned_spend = tbl$planned_spend, stringsAsFactors = FALSE)
+  })
+  parts <- parts[!vapply(parts, is.null, logical(1))]
+  if (!length(parts)) return(NULL)
+  cmp <- do.call(rbind, parts)
 
   agg <- stats::aggregate(cmp$planned_spend,
-                          by = list(scenario = cmp$scenario, week = cmp[[wk]]),
+                          by = list(scenario = cmp$scenario, period = cmp$period),
                           FUN = sum)
   names(agg)[3] <- "planned_spend"
 
-  ggplot2::ggplot(agg, ggplot2::aes(x = week, y = planned_spend,
+  # Breaks are set per basis: a month view lands one tick on each month start
+  # (the auto-breaks otherwise fall mid-month and repeat "Apr 2026"), and a day
+  # view thins to weekly ticks so 160-odd days do not overprint their labels.
+  lab <- switch(basis, day = "%b %d", week = "%b %d", month = "%b %Y")
+  brk <- switch(basis, day = "1 week", week = ggplot2::waiver(), month = "1 month")
+  ggplot2::ggplot(agg, ggplot2::aes(x = period, y = planned_spend,
                                     colour = scenario, group = scenario)) +
     ggplot2::geom_line(linewidth = 0.9) +
-    ggplot2::geom_point(size = 1.6) +
+    ggplot2::geom_point(size = if (basis == "day") 0.9 else 1.6) +
     ggplot2::scale_colour_manual(values = brand_pal(length(unique(agg$scenario)))) +
     ggplot2::scale_y_continuous(labels = fmt_money_short,
                                 expand = ggplot2::expansion(mult = c(0.05, 0.1))) +
-    ggplot2::scale_x_date(date_labels = "%b %d") +
-    ggplot2::labs(title = "Flighting", subtitle = "Total planned spend by week",
+    ggplot2::scale_x_date(date_labels = lab, date_breaks = brk) +
+    ggplot2::labs(title = "Flighting",
+                  subtitle = paste0("Total planned spend by ", basis),
                   x = NULL, y = NULL) +
     theme_plan()
 }
@@ -129,7 +150,7 @@ chart_deltas <- function(set, scenario) {
   cmp <- cmp[cmp$scenario == scenario, , drop = FALSE]
   if (!nrow(cmp)) return(NULL)
 
-  lg <- setdiff(set@grain, .week_col_of(set))
+  lg <- .dim_cols(set)
   cmp$li <- do.call(paste, c(lapply(lg, function(g) as.character(cmp[[g]])),
                              list(sep = " | ")))
   agg <- stats::aggregate(cmp$spend_vs_base, by = list(li = cmp$li), FUN = sum)
@@ -160,6 +181,15 @@ chart_deltas <- function(set, scenario) {
 
 # The week column of a set, taken from its baseline plan (every scenario in a
 # set shares a grain, so any of them would do).
+# Grain columns that describe a line item, excluding the week and the columns
+# mediaplanr reserves. Without the second exclusion a plan carrying flights
+# could end up with "Mix by Flight_id" or delta labels reading
+# "TV | NBC | fl_2026... | even".
+.dim_cols <- function(set) {
+  setdiff(set@grain, c(.week_col_of(set), mediaplanr::flight_cols(),
+                       mediaplanr::unit_cols()))
+}
+
 .week_col_of <- function(set) {
   p <- set@scenarios[[set@base_name]]
   if (length(p@week_col)) p@week_col else NULL
@@ -167,12 +197,12 @@ chart_deltas <- function(set, scenario) {
 
 # Dispatch used by both the Compare page and the agent's plot tool.
 plan_chart <- function(set, which = c("totals", "mix", "flighting", "deltas"),
-                       scenarios = NULL, scenario = NULL) {
+                       scenarios = NULL, scenario = NULL, basis = "week") {
   which <- match.arg(which)
   switch(which,
     totals    = chart_totals(set, scenarios),
     mix       = chart_mix(set, scenarios),
-    flighting = chart_flighting(set, scenarios),
+    flighting = chart_flighting(set, scenarios, basis = basis),
     deltas    = chart_deltas(set, scenario %||% utils::tail(names(set@scenarios), 1))
   )
 }

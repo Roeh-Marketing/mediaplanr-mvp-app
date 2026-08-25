@@ -45,7 +45,14 @@ nav_panel(
     layout_columns(
       col_widths = c(6, 6),
       card(full_screen = TRUE, height = "380px",
-           card_header("Flighting"),
+           card_header(
+             "Flighting",
+             div(class = "ms-auto",
+                 selectInput("cmp_flight_basis", label = NULL,
+                             choices = c("By week" = "week", "By month" = "month",
+                                         "By day" = "day"),
+                             selected = "week", width = "130px"))
+           ),
            plotOutput("cmp_plot_flight", height = "100%")),
       card(full_screen = TRUE, height = "380px",
            card_header("What changed"),

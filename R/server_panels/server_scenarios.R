@@ -49,11 +49,13 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
   # --- quick operation ---------------------------------------------------
   output$scn_target_inputs <- renderUI({
     p <- active_plan()
-    lg <- mediaplanr::line_item_grain(p)
-    d  <- p@data
+    # grain_values() is what the package offers for exactly this: each grain
+    # column's distinct values, in the shape an edit `target` accepts. Hand-
+    # rolling it here was a second implementation that could drift.
+    lg <- setdiff(mediaplanr::line_item_grain(p), mediaplanr::flight_cols())
     controls <- lapply(lg, function(g) {
       selectizeInput(paste0("tgt_", g), tools::toTitleCase(g),
-                     choices = sort(unique(as.character(d[[g]]))),
+                     choices = as.character(mediaplanr::grain_values(p, g)),
                      multiple = TRUE,
                      options = list(placeholder = "all",
                                     plugins = list("remove_button")))
@@ -61,7 +63,7 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
     if (length(p@week_col)) {
       controls <- c(controls, list(selectizeInput(
         "tgt_week", "Week",
-        choices = as.character(sort(unique(d[[p@week_col]]))),
+        choices = as.character(mediaplanr::grain_values(p, p@week_col)),
         multiple = TRUE,
         options = list(placeholder = "all", plugins = list("remove_button")))))
     }

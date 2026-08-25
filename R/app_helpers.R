@@ -79,6 +79,23 @@ is_dateish <- function(x) {
   !all(is.na(v))
 }
 
+# Units are counts, not money: thousands separators, no currency, and a short
+# form once they get large -- 28M impressions reads better than 28,000,000.
+fmt_units <- function(x) {
+  if (!length(x) || is.na(x)) return("—")
+  if (x >= 1e9) return(paste0(round(x / 1e9, 1), "B"))
+  if (x >= 1e6) return(paste0(round(x / 1e6, 1), "M"))
+  if (x >= 1e4) return(paste0(round(x / 1e3, 1), "K"))
+  formatC(x, format = "f", big.mark = ",", digits = 0)
+}
+
+# A rate needs more precision than a budget: a CPC of $0.80 must not round to
+# $1, and a CPM of $5.25 must not round to $5.
+fmt_rate <- function(x) {
+  if (!length(x) || is.na(x)) return("—")
+  paste0("$", formatC(x, format = "f", digits = 2, big.mark = ","))
+}
+
 # A centred muted message for cards with nothing to show yet.
 empty_state <- function(msg, icon_name = "inbox") {
   div(

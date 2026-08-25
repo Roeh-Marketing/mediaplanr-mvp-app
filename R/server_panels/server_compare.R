@@ -140,8 +140,9 @@ server_compare <- function(input, output, session, st, bump) {
 
   output$cmp_plot_flight <- renderPlot({
     if (!has_any()) return(blank("Select scenarios to compare"))
-    p <- chart_flighting(st$set, selected())
-    if (is.null(p)) blank("This plan has no week column") else p
+    p <- chart_flighting(st$set, selected(),
+                         basis = input$cmp_flight_basis %||% "week")
+    if (is.null(p)) blank("This plan has no time dimension") else p
   }, bg = "transparent")
 
   output$cmp_plot_deltas <- renderPlot({
@@ -163,7 +164,7 @@ server_compare <- function(input, output, session, st, bump) {
                       delta = "spend_vs_base",
                       share = "share_of_total")
 
-    g <- st$set@grain
+    g <- setdiff(st$set@grain, c(mediaplanr::flight_cols(), mediaplanr::unit_cols()))
     keep <- c("scenario", g, val_col)
     tbl <- cmp[, keep, drop = FALSE]
     names(tbl)[names(tbl) == val_col] <- "value"
