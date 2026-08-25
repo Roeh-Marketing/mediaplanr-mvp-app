@@ -124,9 +124,10 @@ chart_flighting <- function(set, scenarios = NULL, basis = "week") {
 
   # Breaks are set per basis: a month view lands one tick on each month start
   # (the auto-breaks otherwise fall mid-month and repeat "Apr 2026"), and a day
-  # view thins to weekly ticks so 160-odd days do not overprint their labels.
+  # view thins to fortnightly ticks so a quarter's worth of days does not
+  # overprint its labels in the narrow Compare card.
   lab <- switch(basis, day = "%b %d", week = "%b %d", month = "%b %Y")
-  brk <- switch(basis, day = "1 week", week = ggplot2::waiver(), month = "1 month")
+  brk <- switch(basis, day = "2 weeks", week = ggplot2::waiver(), month = "1 month")
   ggplot2::ggplot(agg, ggplot2::aes(x = period, y = planned_spend,
                                     colour = scenario, group = scenario)) +
     ggplot2::geom_line(linewidth = 0.9) +
