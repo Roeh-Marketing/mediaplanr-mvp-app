@@ -112,11 +112,62 @@ build_plan <- function(df, grain, week = NULL, spend_col = "planned_spend",
   )
 }
 
+# Build one MediaPlan from a file of FLIGHTS -- one row per buy, with in-market
+# dates instead of a week. mediaplanr expands each buy across the weeks it
+# touches, so what comes back is an ordinary weekly plan that the grid, the
+# charts and every op already understand.
+#
+# `grain` here is the LINE ITEM only: the week column is created by the
+# constructor, and it errors if the file already has one.
+build_plan_from_flights <- function(df, grain, start_col, end_col,
+                                    spend_col = "planned_spend",
+                                    week_start = "Monday",
+                                    units_col = NULL, rate_col = NULL,
+                                    unit_type_col = NULL,
+                                    name, nickname = "", advertiser = "",
+                                    planner = "", status = "in development",
+                                    objective = "") {
+  blank <- function(x) if (is.null(x) || !nzchar(x)) NULL else x
+  df <- .rename_for_units(df, blank(units_col), blank(rate_col),
+                          blank(unit_type_col))
+  mediaplanr::media_plan_from_flights(
+    df,
+    grain         = grain,
+    start         = start_col,
+    end           = end_col,
+    planned_spend = spend_col,
+    week_start    = week_start,
+    name          = name,
+    nickname      = nickname,
+    advertiser    = advertiser,
+    planner       = planner,
+    status        = status,
+    objective     = objective
+  )
+}
+
+# media_plan_from_flights() has no planned_units/planned_rate/unit_type
+# arguments -- it takes them as canonical columns -- so a mapping is applied by
+# renaming here first.
+.rename_for_units <- function(df, units_col, rate_col, unit_type_col) {
+  ren <- c(planned_units = units_col, planned_rate = rate_col,
+           unit_type = unit_type_col)
+  for (to in names(ren)) {
+    from <- ren[[to]]
+    if (is.null(from) || identical(from, to)) next
+    if (!from %in% names(df)) next
+    if (to %in% names(df)) df[[to]] <- NULL
+    names(df)[names(df) == from] <- to
+  }
+  df
+}
+
 # Validate a mapping against a data frame BEFORE constructing, so the Plan page
 # can show what is wrong while the user is still choosing columns rather than
 # only failing at the moment they click Build.
-check_mapping <- function(df, grain, week, spend_col) {
-  problems <- character(0)
+check_mapping <- function(df, grain, week, spend_col,
+                         units_col = NULL, rate_col = NULL) {
+  problems <- .check_unit_trio(df, spend_col, units_col, rate_col)
 
   if (!length(grain)) {
     problems <- c(problems, "Pick at least one grain column.")
@@ -127,6 +178,7 @@ check_mapping <- function(df, grain, week, spend_col) {
     problems <- c(problems, paste0("Column(s) not in the file: ",
                                    paste(miss, collapse = ", "), "."))
   }
+  problems <- c(problems, .check_trio_arity(spend_col, units_col, rate_col))
   if (nzchar(spend_col %||% "") && spend_col %in% names(df)) {
     v <- suppressWarnings(as.numeric(df[[spend_col]]))
     if (all(is.na(v))) {
@@ -154,6 +206,83 @@ check_mapping <- function(df, grain, week, spend_col) {
       problems <- c(problems, paste0(
         n, " duplicate row(s) at this grain -- add a column (e.g. week) or ",
         "aggregate first."))
+    }
+  }
+  problems
+}
+
+# Spend, units and rate are bound by one identity, so any two give the third.
+# Checking it here means "map two of the three" is enforced while mapping
+# rather than surfacing as a package error on Build.
+.check_unit_trio <- function(df, spend_col, units_col, rate_col) {
+  problems <- character(0)
+  # Arity ("two of the three") is checked by the caller, which knows whether
+  # spend is mapped; emitting it here too produced two messages for one fault.
+  for (nm in c(units_col, rate_col)) {
+    if (is.null(nm) || !nm %in% names(df)) next
+    v <- suppressWarnings(as.numeric(df[[nm]]))
+    if (all(is.na(v))) {
+      problems <- c(problems, paste0("'", nm, "' is not numeric."))
+    } else if (any(v < 0, na.rm = TRUE)) {
+      problems <- c(problems, paste0("'", nm, "' has negative values."))
+    }
+  }
+  problems
+}
+
+# Spend can be left unmapped only when units and a rate are both there, since
+# the package computes whichever of the three is missing.
+.check_trio_arity <- function(spend_col, units_col, rate_col) {
+  if (nzchar(spend_col %||% "")) return(character(0))
+  if (!is.null(units_col) && !is.null(rate_col)) return(character(0))
+  paste0("Map a planned spend column, or map both units and a rate so spend ",
+         "can be computed.")
+}
+
+# The flights mapping is a different shape: no week column (the constructor
+# creates it) and two dates that must parse and be the right way round.
+check_flight_mapping <- function(df, grain, start_col, end_col, spend_col,
+                                 units_col = NULL, rate_col = NULL) {
+  problems <- c(.check_unit_trio(df, spend_col, units_col, rate_col),
+                .check_trio_arity(spend_col, units_col, rate_col))
+
+  if (!length(grain)) {
+    problems <- c(problems, "Pick at least one line item column.")
+  }
+  if (is.null(start_col) || is.null(end_col)) {
+    return(c(problems, "Map both a flight start and a flight end column."))
+  }
+  miss <- setdiff(c(grain, start_col, end_col), names(df))
+  if (length(miss)) {
+    return(c(problems, paste0("Column(s) not in the file: ",
+                              paste(miss, collapse = ", "), ".")))
+  }
+  if ("week" %in% names(df)) {
+    problems <- c(problems, paste0(
+      "This file already has a 'week' column. Flight mode creates one, so use ",
+      "the weekly mode instead."))
+  }
+  fs <- to_date(df[[start_col]]); fe <- to_date(df[[end_col]])
+  if (!inherits(fs, "Date")) {
+    problems <- c(problems, paste0("'", start_col, "' does not look like a date."))
+  }
+  if (!inherits(fe, "Date")) {
+    problems <- c(problems, paste0("'", end_col, "' does not look like a date."))
+  }
+  if (inherits(fs, "Date") && inherits(fe, "Date")) {
+    if (anyNA(fs) || anyNA(fe)) {
+      problems <- c(problems, "Every flight needs both a start and an end date.")
+    } else if (any(fe < fs)) {
+      problems <- c(problems, paste0(sum(fe < fs),
+                                     " flight(s) end before they start."))
+    }
+  }
+  if (nzchar(spend_col %||% "") && spend_col %in% names(df)) {
+    v <- suppressWarnings(as.numeric(df[[spend_col]]))
+    if (all(is.na(v))) {
+      problems <- c(problems, paste0("'", spend_col, "' is not numeric."))
+    } else if (any(v < 0, na.rm = TRUE)) {
+      problems <- c(problems, paste0("'", spend_col, "' has negative values."))
     }
   }
   problems

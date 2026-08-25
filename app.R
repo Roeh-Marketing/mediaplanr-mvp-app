@@ -46,5 +46,9 @@ if (!file.exists("data/sample_media_plan.csv")) {
   dir.create("data", showWarnings = FALSE)
   write_sample_csv()
 }
+if (!file.exists("data/sample_flight_plan.csv")) {
+  dir.create("data", showWarnings = FALSE)
+  write_sample_flights_csv()
+}
 
 shinyApp(app_ui, app_server)

@@ -17,21 +17,63 @@ nav_panel(
                 buttonLabel = icon("upload")),
       div(class = "form-text mb-2 mt-n2",
           "An Excel workbook loads one scenario per sheet."),
-      actionButton("plan_load_sample", "Load sample plan",
-                   icon = icon("database"),
-                   class = "btn-sm btn-outline-secondary w-100 mb-3"),
+      layout_columns(
+        col_widths = c(6, 6),
+        actionButton("plan_load_sample", "Weekly sample",
+                     icon = icon("database"),
+                     class = "btn-sm btn-outline-secondary w-100 mb-3"),
+        actionButton("plan_load_flights", "Flight sample",
+                     icon = icon("plane-departure"),
+                     class = "btn-sm btn-outline-secondary w-100 mb-3")
+      ),
 
       uiOutput("plan_source_status"),
 
       tags$h6("2. Columns", class = "text-muted mb-1"),
+      radioButtons("map_mode", "The file has",
+                   choices = c("One row per line item per week" = "weekly",
+                               "One row per flight (in-market dates)" = "flights"),
+                   selected = "weekly"),
       selectizeInput("map_grain", "Grain (what identifies a row)",
                      choices = NULL, multiple = TRUE,
                      options = list(plugins = list("remove_button", "drag_drop"),
                                     placeholder = "channel, partner, week...")),
       div(class = "form-text mb-2 mt-n2",
           "Order matters: coarsest first (channel, then partner)."),
-      selectInput("map_week", "Week column", choices = NULL),
+      conditionalPanel(
+        "input.map_mode == 'flights'",
+        selectInput("map_flight_start", "Flight start column", choices = NULL),
+        selectInput("map_flight_end", "Flight end column", choices = NULL),
+        selectInput("map_week_start", "Weeks begin on",
+                    choices = c("Monday", "Sunday", "Tuesday", "Wednesday",
+                                "Thursday", "Friday", "Saturday")),
+        div(class = "form-text mb-2 mt-n2",
+            "Each buy is spread across its days and gathered into these weeks.")
+      ),
+      conditionalPanel(
+        "input.map_mode != 'flights'",
+        selectInput("map_week", "Week column", choices = NULL)
+      ),
       selectInput("map_spend", "Planned spend column", choices = NULL),
+
+      # Units are optional and most plans have none, so they stay folded away
+      # until asked for. The package binds spend, units and rate by one
+      # identity and computes whichever is missing, so mapping any two is
+      # enough -- including leaving spend unmapped when units and a rate are
+      # both present.
+      accordion(
+        open = FALSE,
+        accordion_panel(
+          "What it buys (optional)",
+          icon = icon("chart-simple"),
+          selectInput("map_unit_type", "Unit type column", choices = NULL),
+          selectInput("map_units", "Planned units column", choices = NULL),
+          selectInput("map_rate", "Rate column", choices = NULL),
+          div(class = "form-text mt-n2",
+              "Map any two of spend, units and rate; the third is computed. ",
+              "Impressions are priced as a CPM, everything else per unit.")
+        )
+      ),
 
       uiOutput("plan_mapping_status"),
 

@@ -1,0 +1,6 @@
+"channel","partner","campaign","flight_start","flight_end","planned_spend","unit_type","planned_rate"
+"OOH","JCDecaux","Brand",2026-04-08,2026-05-10,210000,NA,NA
+"TV","NBC","Burst 1",2026-04-06,2026-04-26,180000,NA,NA
+"TV","NBC","Burst 2",2026-05-18,2026-06-14,145000,NA,NA
+"Search","Google","Always on",2026-04-15,2026-04-15,3100,"click",0.8
+"Social","Meta","Brand",2026-04-06,2026-06-28,140000,"impression",5

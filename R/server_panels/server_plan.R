@@ -26,6 +26,19 @@ server_plan <- function(input, output, session, st, bump, uploaded) {
       type = "message")
   })
 
+  # The flight sample is authored as buys, so loading it also flips the mode --
+  # otherwise the mapping validates against the wrong shape and the user has to
+  # work out why.
+  observeEvent(input$plan_load_flights, {
+    uploaded(list(name = "Q2 2026 Flight Plan",
+                  sheets = stats::setNames(list(sample_flights_df()), "baseline")))
+    updateRadioButtons(session, "map_mode", selected = "flights")
+    updateTextInput(session, "meta_name", value = "Q2 2026 Flight Plan")
+    showNotification(
+      "Flight sample loaded - one row per buy, mapped to in-market dates.",
+      type = "message")
+  })
+
   observeEvent(input$plan_load_sample, {
     uploaded(list(name = "Q2 2026 Media Plan",
                   sheets = stats::setNames(list(sample_plan_df()), "baseline")))
@@ -55,8 +68,27 @@ server_plan <- function(input, output, session, st, bump, uploaded) {
                       choices = c("(none)" = "", dateish),
                       selected = g$week %||% "")
     updateSelectInput(session, "map_spend",
-                      choices = nms,
+                      choices = c("(none)" = "", nms),
                       selected = g$spend %||% nms[length(nms)])
+
+    # Units are optional throughout, so every one of these can stay unmapped.
+    updateSelectInput(session, "map_unit_type", choices = c("(none)" = "", nms),
+                      selected = g$unit_type %||% "")
+    updateSelectInput(session, "map_units", choices = c("(none)" = "", nms),
+                      selected = g$units %||% "")
+    updateSelectInput(session, "map_rate", choices = c("(none)" = "", nms),
+                      selected = g$rate %||% "")
+
+    # Flight mode: the week column is CREATED by the constructor, so the grain
+    # here is the line item only and the dates are mapped separately.
+    fs <- if ("flight_start" %in% nms) "flight_start" else
+      (dateish[1] %||% "")
+    fe <- if ("flight_end" %in% nms) "flight_end" else
+      (utils::tail(dateish, 1) %||% "")
+    updateSelectInput(session, "map_flight_start",
+                      choices = c("(none)" = "", nms), selected = fs)
+    updateSelectInput(session, "map_flight_end",
+                      choices = c("(none)" = "", nms), selected = fe)
   })
 
   output$plan_source_status <- renderUI({
@@ -73,10 +105,22 @@ server_plan <- function(input, output, session, st, bump, uploaded) {
   })
 
   # --- live mapping validation ------------------------------------------
+  blank_to_null <- function(x) if (is.null(x) || !nzchar(x)) NULL else x
+
   mapping_problems <- reactive({
     u <- uploaded(); req(u)
-    wk <- if (nzchar(input$map_week %||% "")) input$map_week else NULL
-    check_mapping(first_sheet(), input$map_grain, wk, input$map_spend %||% "")
+    if (identical(input$map_mode, "flights")) {
+      return(check_flight_mapping(
+        first_sheet(), input$map_grain,
+        blank_to_null(input$map_flight_start), blank_to_null(input$map_flight_end),
+        input$map_spend %||% "",
+        units_col = blank_to_null(input$map_units),
+        rate_col  = blank_to_null(input$map_rate)))
+    }
+    check_mapping(first_sheet(), input$map_grain,
+                  blank_to_null(input$map_week), input$map_spend %||% "",
+                  units_col = blank_to_null(input$map_units),
+                  rate_col  = blank_to_null(input$map_rate))
   })
 
   output$plan_mapping_status <- renderUI({
@@ -111,13 +155,31 @@ server_plan <- function(input, output, session, st, bump, uploaded) {
       for (i in seq_along(sheets)) {
         nick <- names(sheets)[i]
         if (!nzchar(nick)) nick <- input$meta_nickname %||% ""
-        p <- build_plan(
-          sheets[[i]], grain = input$map_grain, week = wk,
-          spend_col = input$map_spend,
-          name = input$meta_name, nickname = nick,
-          advertiser = input$meta_advertiser %||% "",
-          planner = input$meta_planner %||% "",
-          status = if (first) input$meta_status else "in development")
+        p <- if (identical(input$map_mode, "flights")) {
+          build_plan_from_flights(
+            sheets[[i]], grain = input$map_grain,
+            start_col = input$map_flight_start, end_col = input$map_flight_end,
+            spend_col = input$map_spend,
+            week_start = input$map_week_start %||% "Monday",
+            units_col = blank_to_null(input$map_units),
+            rate_col = blank_to_null(input$map_rate),
+            unit_type_col = blank_to_null(input$map_unit_type),
+            name = input$meta_name, nickname = nick,
+            advertiser = input$meta_advertiser %||% "",
+            planner = input$meta_planner %||% "",
+            status = if (first) input$meta_status else "in development")
+        } else {
+          build_plan(
+            sheets[[i]], grain = input$map_grain, week = wk,
+            spend_col = input$map_spend,
+            units_col = blank_to_null(input$map_units),
+            rate_col = blank_to_null(input$map_rate),
+            unit_type_col = blank_to_null(input$map_unit_type),
+            name = input$meta_name, nickname = nick,
+            advertiser = input$meta_advertiser %||% "",
+            planner = input$meta_planner %||% "",
+            status = if (first) input$meta_status else "in development")
+        }
         if (first) { store_init(st, p); first <- FALSE } else store_add(st, p)
       }
       TRUE
