@@ -5,7 +5,6 @@
       "name": "mediaplanr-app",
       "runtimeExecutable": "Rscript",
       "runtimeArgs": [
-        "--vanilla",
         "-e",
         "setwd('/Users/roeh/Documents/roeh/mediaplanr-mvp-app'); source('renv/activate.R'); shiny::runApp('.', port = 7788, launch.browser = FALSE, host = '127.0.0.1')"
       ],
