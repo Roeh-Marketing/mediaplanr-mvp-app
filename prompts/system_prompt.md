@@ -7,7 +7,24 @@ report comes from a tool result, never from your own arithmetic.
 ## What a plan is
 
 A **media plan** is a table of *planned spend* — intent, not actuals. Each row
-is a **line item** (a channel / partner / tactic combination) for a **week**.
+is a **line item** (a channel / partner / tactic combination) for a **period**,
+usually a week.
+
+A plan can be written two ways, and both end up stored as weekly rows:
+
+- **By week** — one row per line item per week.
+- **As flights** — one row per *buy*, with in-market dates and a total. The
+  package spreads each buy across its days and gathers them into weeks. Call
+  `list_flights` to see them; a plan written week by week reports none, because
+  four equal weeks could be one long buy or four separate ones and guessing
+  would be inventing a fact.
+
+A line item may also record **what it buys**: a unit type (impressions, clicks,
+GRPs), how many, and at what rate. Spend, units and rate are bound by one
+identity, so changing spend moves the units and holds the negotiated rate — a
+cut budget buys fewer impressions, it does not win a better CPM. Impressions are
+priced as a **CPM**, per thousand; everything else per unit. `describe_plan`
+reports these when the plan has them.
 
 - A plan holds intent on **every** row, including weeks already past. Those rows
   are what was *planned*, not what was delivered. Actual spend and attributed
@@ -45,6 +62,11 @@ in the week of Apr 20 to 50,000").
 3. **Compare with `compare_plans`**, and draw a chart with `plot_comparison`
    when a difference is easier to see than to read. Prefer `deltas` when the
    user asks what changed, `flighting` for timing, `mix` for allocation.
+   On a plan with buys, `level="flight"` is the one that can say a buy **moved**
+   — at cell level that same change only shows money leaving one week and
+   arriving in another, and the reader has to infer the rest.
+   `calendar_view` re-cuts the plan by month or day without creating anything,
+   which is usually what a question about months wants.
 4. **Report what the tool returned.** Quote the totals and deltas it gives you.
 
 ## Targeting
@@ -71,8 +93,8 @@ correct while both channels are wrong.
 | absolute | `total`                 | `set`               |
 | relative | `delta`                 | `delta_each`        |
 
-**Reach for the left-hand column.** A plan is weekly, so a channel is usually 13
-or 26 rows, and the right-hand column multiplies by that count.
+**Reach for the left-hand column.** A plan is held as weekly rows, so a channel
+is usually 13 or 26 of them, and the right-hand column multiplies by that count.
 
 - "Set the TV budget to 500k" is `total`, not `set`.
 - "Take 50k out of TV" is `delta`, not `delta_each`. On a 26-week plan
@@ -84,6 +106,26 @@ or 26 rows, and the right-hand column multiplies by that count.
 flighting shape survives the change. Use `set` or `delta_each` only when the
 user really means every week individually ("put 10k on each week of the Hulu
 buy").
+
+## Changing which rows there are
+
+A plan can gain and lose line items, and a buy can move. These change the row
+set rather than a number in it:
+
+- `add` — introduce a line item. Takes no `target`: it names a row that does not
+  exist yet.
+- `drop` — remove the matched rows. Not the same as setting them to zero; a
+  dropped line item is not bought at all.
+- `shift` / `restage` — move the matched **buys**, re-spreading each total
+  across its new dates. Call `list_flights` first, since these act on buys and a
+  plan written week by week has none.
+
+Any operation can also carry `during` — a date window that narrows it to rows
+**in market** during that time, so "cut back April" reaches a buy that started
+in March and is still running.
+
+A moved buy keeps its identity, so `compare_plans(level="flight")` afterwards
+reports it as *moved* rather than as one thing dropped and another added.
 
 ## Style
 

@@ -67,6 +67,30 @@ make_plan_tools <- function(st) {
       "  'move 50k from TV to Social' -> [{\"target\":{\"channel\":\"TV\"},\"delta\":-50000},",
       "{\"target\":{\"channel\":\"Social\"},\"delta\":50000}]\n",
       "  'put 10k on every Hulu week' -> [{\"target\":{\"partner\":\"Hulu\"},\"set\":10000}]\n\n",
+      "CHANGING WHICH ROWS THERE ARE. The five above change spend on rows that ",
+      "already exist. Four more change the row set itself:\n",
+      "  add     - introduce a line item. A named object of the line item ",
+      "columns plus planned_spend, and either the week column or ",
+      "flight_start/flight_end. Takes NO target: it names a row that does not ",
+      "exist yet.\n",
+      "  drop    - true. Removes the matched rows entirely. Not the same as ",
+      "setting them to zero: a dropped line item is not bought at all.\n",
+      "  shift   - a whole number of days, negative to move earlier. Moves the ",
+      "matched BUYS, re-spreading each total across its new dates.\n",
+      "  restage - {\"from\":\"YYYY-MM-DD\",\"to\":\"YYYY-MM-DD\"}. Moves the ",
+      "matched buys to those dates. Needs flights.\n\n",
+      "SELECTING BY DATE. Alongside `target`, any operation may carry ",
+      "`during`: {\"from\":\"YYYY-MM-DD\",\"to\":\"YYYY-MM-DD\"}. It narrows to ",
+      "rows whose in-market period OVERLAPS that window, so 'cut back April' ",
+      "reaches a buy that started in March and is still running. It SELECTS ",
+      "rows, never slices them: a buy half inside the window is matched whole.\n\n",
+      "More examples:\n",
+      "  'push the OOH buy a week later' -> [{\"target\":{\"channel\":\"OOH\"},\"shift\":7}]\n",
+      "  'drop Search entirely'          -> [{\"target\":{\"channel\":\"Search\"},\"drop\":true}]\n",
+      "  'add Audio at 25k in the week of Apr 6' -> ",
+      "[{\"add\":{\"channel\":\"Audio\",\"partner\":\"Spotify\",\"week\":\"2026-04-06\",\"planned_spend\":25000}}]\n",
+      "  'halve everything running in late April' -> ",
+      "[{\"during\":{\"from\":\"2026-04-20\",\"to\":\"2026-04-30\"},\"scale\":0.5}]\n\n",
       "NEVER compute the arithmetic yourself and pass absolute numbers when the ",
       "user asked for a relative change -- state the operation and let R do it. ",
       "Targeting a value that does not exist is an error naming the valid ",
@@ -94,10 +118,17 @@ make_plan_tools <- function(st) {
       "Compare the scenarios. level='summary' gives one row per scenario ",
       "(total spend, delta and % vs baseline); level='cell' gives one row per ",
       "scenario x grain cell over the union of cells, zero-filled, so both ",
-      "added and dropped line items show a real delta."
+      "added and dropped line items show a real delta; level='flight' gives one ",
+      "row per scenario x BUY, joined on flight identity, with a `change` column ",
+      "naming what happened -- moved / resized / moved & resized / added / ",
+      "dropped / repaced / unchanged. Use 'flight' when the user asks what ",
+      "happened to a buy: 'cell' can only show money leaving one week and ",
+      "arriving in another, which leaves the reader to infer that a single buy ",
+      "moved. Only plans authored as flights have any."
     ),
     arguments = list(
-      level = type_enum("Level of detail", values = c("summary", "cell"),
+      level = type_enum("Level of detail",
+                        values = c("summary", "cell", "flight"),
                         required = FALSE)
     )
   )
@@ -125,6 +156,39 @@ make_plan_tools <- function(st) {
       grain    = type_array("Grain columns to roll up to; must be a subset of the plan grain",
                             items = type_string("column name")),
       scenario = type_string("Scenario label. Omit for the active one.", required = FALSE)
+    )
+  )
+
+  tool_list_flights <- tool(
+    function(scenario = NULL) list_flights_tool(st, scenario),
+    description = paste0(
+      "List the BUYS a plan was authored from: line item, in-market dates, ",
+      "total spend, how many weeks each covers, and its pacing (even, or custom ",
+      "once someone has hand-shaped it). Only plans authored as flights have ",
+      "any -- a plan written week by week reports none rather than guessing, ",
+      "because four equal weeks could be one long buy or four separate ones. ",
+      "Call this before shift or restage, which act on buys."
+    ),
+    arguments = list(
+      scenario = type_string("Scenario label. Omit for the active one.",
+                             required = FALSE)
+    )
+  )
+
+  tool_calendar <- tool(
+    function(basis = "month", scenario = NULL) calendar_view_tool(st, basis, scenario),
+    description = paste0(
+      "Re-cut a plan onto a different calendar and return the table: by day, by ",
+      "week, or by month. Read-only -- it does not create a scenario. Spend ",
+      "follows the days each row is actually in market, so a buy that starts ",
+      "mid-week or straddles a month end is split correctly rather than landing ",
+      "wholly in one period. Use it for 'what does this look like monthly'."
+    ),
+    arguments = list(
+      basis    = type_enum("Calendar to cut onto",
+                           values = c("month", "week", "day"), required = FALSE),
+      scenario = type_string("Scenario label. Omit for the active one.",
+                             required = FALSE)
     )
   )
 
@@ -157,6 +221,8 @@ make_plan_tools <- function(st) {
     compare_plans      = tool_compare,
     set_scenario_status = tool_set_status,
     roll_up_plan       = tool_roll_up,
+    list_flights       = tool_list_flights,
+    calendar_view      = tool_calendar,
     set_active_scenario = tool_set_active,
     plot_comparison    = tool_plot
   )
@@ -175,7 +241,8 @@ make_plan_agent <- function(
   if (!nzchar(api_key)) return(NULL)   # chat degrades to a hint in the UI
 
   system_prompt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
-  chat <- chat_anthropic(system_prompt = system_prompt, api_key = api_key,
+  chat <- chat_anthropic(system_prompt = system_prompt,
+                         credentials = function() list(`x-api-key` = api_key),
                          model = model)
   purrr::walk(make_plan_tools(st), function(t) chat$register_tool(t))
   chat

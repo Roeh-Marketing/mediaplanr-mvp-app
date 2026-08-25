@@ -16,6 +16,23 @@
   tryCatch(expr, error = function(e) .err(conditionMessage(e)))
 }
 
+# Same, but folds any WARNINGS into the result. .try() catches errors only, so a
+# function that warns and returns -- compare_scenarios(level = "flight") on a
+# set sharing no flight ids is the live example -- hands the model a clean
+# ok = TRUE payload while the explanation goes to the R console, where no one
+# reads it. Anything that can warn should use this.
+.try_warn <- function(expr) {
+  warnings <- character(0)
+  out <- withCallingHandlers(
+    tryCatch(expr, error = function(e) .err(conditionMessage(e))),
+    warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    })
+  if (length(warnings) && isTRUE(out$ok)) out$warnings <- warnings
+  out
+}
+
 # Render a ggplot as a chat-renderable tool result. Every element must be an
 # ellmer Content object for the image to reach both the model and the chat UI
 # (see the note in mrmopt-mvp-app/R/tool_wrappers.R).
@@ -35,11 +52,22 @@
 
 # --- read -------------------------------------------------------------------
 
+# Built on the package's own accessors rather than hand-rolled, so the model and
+# R cannot drift apart. The old version pasted line item keys ("TV | NBC") and
+# left the model to split strings to recover channel and partner -- exactly the
+# guessing this tool exists to prevent. grain_values() returns each grain
+# column's distinct values in the column's own type, which is precisely what an
+# edit `target` accepts.
 describe_plan_tool <- function(st, scenario = NULL) .try({
   if (!store_has_plan(st)) return(.err("No plan loaded. Ask the user to load one on the Plan page."))
   p  <- store_get(st, scenario)
-  lg <- mediaplanr::line_item_grain(p)
   d  <- p@data
+  lg <- setdiff(mediaplanr::line_item_grain(p), mediaplanr::flight_cols())
+
+  win <- mediaplanr::flight_window(p)
+  fl  <- mediaplanr::flights(p)
+  li  <- mediaplanr::line_item_summary(p)
+
   .ok(
     scenario    = scenario %||% st$active,
     name        = p@name,
@@ -49,17 +77,56 @@ describe_plan_tool <- function(st, scenario = NULL) .try({
     planner     = p@planner,
     grain       = p@grain,
     line_item_grain = lg,
+
+    # When the plan runs. A `during`, `shift` or `restage` is unanswerable
+    # without this, and the old tool reported no dates at all.
+    in_market   = if (length(win)) list(from = format(win[["start"]]),
+                                        to   = format(win[["end"]]),
+                                        days = p@flight_days) else NULL,
     week_col    = if (length(p@week_col)) p@week_col else NULL,
-    weeks       = if (length(p@week_col)) as.character(sort(unique(d[[p@week_col]]))) else NULL,
-    line_items  = unique(mediaplanr::line_item(d, lg)),
+    week_start  = mediaplanr::week_start(p),
+
+    # Every grain column's real values, ready to use as a target.
+    values      = lapply(mediaplanr::grain_values(p), as.character),
+
+    line_items  = .df_rows(li),
+    flights     = if (nrow(fl)) .df_rows(fl) else NULL,
+    units       = .units_summary(p),
+
     n_rows      = nrow(d),
-    total_spend = sum(d$planned_spend),
-    spend_by_line_item = {
-      k <- mediaplanr::line_item(d, lg)
-      as.list(tapply(d$planned_spend, k, sum))
-    }
+    total_spend = sum(d$planned_spend)
   )
 })
+
+# A data frame as a list of row-lists, which is what serialises into a tool
+# result the model can read without column/row confusion.
+.df_rows <- function(df, max_rows = 60) {
+  if (is.null(df) || !nrow(df)) return(NULL)
+  df <- utils::head(df, max_rows)
+  for (nm in names(df)) {
+    if (inherits(df[[nm]], "Date")) df[[nm]] <- format(df[[nm]])
+  }
+  lapply(seq_len(nrow(df)), function(i) as.list(df[i, , drop = FALSE]))
+}
+
+# What the plan buys, per unit type, with the rate in its trade convention --
+# a CPM for impressions, a per-unit cost otherwise.
+.units_summary <- function(p) {
+  d <- p@data
+  if (!all(c("unit_type", "planned_units") %in% names(d))) return(NULL)
+  ok <- !is.na(d$unit_type) & !is.na(d$planned_units)
+  if (!any(ok)) return(NULL)
+  ut <- as.character(d$unit_type)[ok]
+  units <- tapply(d$planned_units[ok], ut, sum)
+  spend <- tapply(d$planned_spend[ok], ut, sum)
+  lapply(stats::setNames(names(units), names(units)), function(u) {
+    per <- if (tolower(u) %in% c("impression", "impressions")) 1000 else 1
+    list(planned_units = unname(units[[u]]),
+         planned_spend = unname(spend[[u]]),
+         rate = unname(spend[[u]] / units[[u]] * per),
+         rate_basis = if (per == 1000) "CPM (per thousand)" else "per unit")
+  })
+}
 
 list_scenarios_tool <- function(st) .try({
   if (!store_has_plan(st)) return(.err("No plan loaded yet."))
@@ -70,14 +137,15 @@ list_scenarios_tool <- function(st) .try({
       scenarios = lapply(seq_len(nrow(s)), function(i) as.list(s[i, ])))
 })
 
-compare_plans_tool <- function(st, level = "summary") .try({
+compare_plans_tool <- function(st, level = "summary") .try_warn({
   if (!store_has_plan(st)) return(.err("No plan loaded yet."))
   if (length(st$set@scenarios) < 2) {
     return(.err("Only the baseline exists so far. Create a scenario first with apply_edits."))
   }
   tbl <- mediaplanr::compare_scenarios(st$set, level)
-  .ok(level = level, n_rows = nrow(tbl),
-      table = lapply(seq_len(nrow(tbl)), function(i) as.list(tbl[i, ])))
+  # .df_rows() formats Date columns as strings; the flight level has three of
+  # them, and a bare Date serialises as a number the model cannot read.
+  .ok(level = level, n_rows = nrow(tbl), table = .df_rows(tbl, max_rows = 200))
 })
 
 # --- write ------------------------------------------------------------------
@@ -132,6 +200,40 @@ set_status_tool <- function(st, scenario, status) .try({
   )
   store_replace(st, scenario, updated)
   .ok(scenario = scenario, status = status)
+})
+
+# The buys a plan was authored from. Reports nothing rather than guessing when
+# a plan records no flight identity -- four equal weeks are indistinguishable
+# from one long buy, and the package refuses to invent one.
+list_flights_tool <- function(st, scenario = NULL) .try({
+  if (!store_has_plan(st)) return(.err("No plan loaded yet."))
+  p  <- store_get(st, scenario)
+  fl <- mediaplanr::flights(p)
+  if (!nrow(fl)) {
+    return(.ok(scenario = scenario %||% st$active, flights = NULL,
+               message = paste0(
+                 "This plan records no flights: it was authored week by week, ",
+                 "not as buys with in-market dates. Weekly rows cannot be ",
+                 "turned back into flights -- four equal weeks could be one ",
+                 "buy or four -- so there is nothing to report.")))
+  }
+  .ok(scenario = scenario %||% st$active, n = nrow(fl), flights = .df_rows(fl))
+})
+
+# Re-cut the plan onto a different calendar. Read-only: it answers "what does
+# this look like by month" without creating a scenario.
+calendar_view_tool <- function(st, basis = "month", scenario = NULL) .try({
+  if (!store_has_plan(st)) return(.err("No plan loaded yet."))
+  if (!basis %in% c("day", "week", "month")) {
+    return(.err("basis must be one of: day, week, month"))
+  }
+  p <- store_get(st, scenario)
+  if (!length(p@week_col)) {
+    return(.err("This plan has no time dimension, so there is no calendar to cut it onto."))
+  }
+  tbl <- mediaplanr::calendarize(p, basis)
+  .ok(scenario = scenario %||% st$active, basis = basis, n_rows = nrow(tbl),
+      total_spend = sum(tbl$planned_spend), rows = .df_rows(tbl, max_rows = 120))
 })
 
 roll_up_tool <- function(st, grain, scenario = NULL) .try({
