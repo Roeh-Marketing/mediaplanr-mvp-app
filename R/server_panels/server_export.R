@@ -58,6 +58,22 @@ server_export <- function(input, output, session, st, bump) {
   )
 
   # --- comparison -------------------------------------------------------
+  # The flight level only means anything for a plan authored as buys. On a
+  # weekly plan compare_scenarios(level = "flight") returns zero rows, so
+  # offering it would hand the user an empty file with no explanation. It is
+  # also the level that can WARN (on a set whose scenarios share no flight ids),
+  # and a downloadHandler sends warnings to the console, not the user.
+  observe({
+    bump()
+    has_flights <- store_has_plan(st) &&
+      nrow(mediaplanr::flights(store_base(st))) > 0
+    ch <- c("Summary — one row per scenario" = "summary",
+            "Cells — line item x week x scenario" = "cell")
+    if (has_flights) ch <- c(ch, "Flights — one buy x scenario" = "flight")
+    updateSelectInput(session, "exp_level", choices = ch,
+                      selected = isolate(input$exp_level) %||% "summary")
+  })
+
   output$exp_compare <- downloadHandler(
     filename = function() {
       paste0("mediaplan-compare-", input$exp_level %||% "summary", "-", stamp(),

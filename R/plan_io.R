@@ -19,6 +19,45 @@ plan_name_from_file <- function(filename) {
   trimws(gsub("\\s+", " ", base))
 }
 
+# Put mediaplanr's reserved columns back into the types its validator demands.
+#
+# This is what makes the export -> re-upload loop work for a flighted plan.
+# media_plan_from_df() coerces only the WEEK column, so flight_start and
+# flight_end arrive as character from a csv (or POSIXct from readxl) and the
+# validator rejects the plan outright: "'flight_start' must hold Date values."
+#
+# period_basis and pacing are checked against their level sets without
+# lower-casing, so a workbook where someone typed "Even" or "Week" in Excel
+# also fails. media_plan_from_flights() normalises those on its own path; this
+# is the same courtesy for the upload path.
+normalise_reserved <- function(df) {
+  for (nm in intersect(c("flight_start", "flight_end"), names(df))) {
+    df[[nm]] <- to_date(df[[nm]])
+  }
+  for (nm in intersect(c("period_basis", "pacing", "unit_type"), names(df))) {
+    if (is.character(df[[nm]]) || is.factor(df[[nm]])) {
+      df[[nm]] <- tolower(trimws(as.character(df[[nm]])))
+    }
+  }
+  # readxl hands back every date cell as POSIXct; a plain Date is what the rest
+  # of the app and the package expect.
+  for (nm in names(df)) {
+    if (inherits(df[[nm]], "POSIXct")) df[[nm]] <- as.Date(df[[nm]])
+  }
+  df
+}
+
+# as.Date() errors on unparseable strings rather than returning NA, so guard it
+# the same way mediaplanr does. Returns the input untouched when it cannot be
+# read as dates, so the mapping check can report the problem in context.
+to_date <- function(x) {
+  if (inherits(x, "Date")) return(x)
+  if (inherits(x, "POSIXct")) return(as.Date(x))
+  out <- suppressWarnings(tryCatch(as.Date(as.character(x)),
+                                   error = function(e) NULL))
+  if (is.null(out) || all(is.na(out))) x else out
+}
+
 # Returns list(name = <plan name>, sheets = named list of data frames).
 # A csv yields a single unnamed sheet; an xlsx yields one per worksheet.
 read_plan_file <- function(path, filename = basename(path)) {
@@ -28,7 +67,8 @@ read_plan_file <- function(path, filename = basename(path)) {
   if (ext %in% c("xlsx", "xls")) {
     sheets <- readxl::excel_sheets(path)
     frames <- lapply(sheets, function(s) {
-      as.data.frame(readxl::read_excel(path, sheet = s), stringsAsFactors = FALSE)
+      normalise_reserved(
+        as.data.frame(readxl::read_excel(path, sheet = s), stringsAsFactors = FALSE))
     })
     names(frames) <- sheets
     return(list(name = nm, sheets = frames))
@@ -40,7 +80,7 @@ read_plan_file <- function(path, filename = basename(path)) {
     } else {
       utils::read.csv(path, stringsAsFactors = FALSE, check.names = TRUE)
     }
-    return(list(name = nm, sheets = stats::setNames(list(df), "")))
+    return(list(name = nm, sheets = stats::setNames(list(normalise_reserved(df)), "")))
   }
 
   stop("Unsupported file type '", ext, "'. Upload a .csv, .tsv or .xlsx.",
@@ -51,13 +91,18 @@ read_plan_file <- function(path, filename = basename(path)) {
 # mediaplanr::media_plan_from_df(); its errors are already user-readable, so
 # they are allowed to propagate to the notification.
 build_plan <- function(df, grain, week = NULL, spend_col = "planned_spend",
+                       units_col = NULL, rate_col = NULL, unit_type_col = NULL,
                        name, nickname = "", advertiser = "", planner = "",
                        status = "in development", objective = "") {
+  blank <- function(x) if (is.null(x) || !nzchar(x)) NULL else x
   mediaplanr::media_plan_from_df(
     df,
     grain         = grain,
     week          = week,
     planned_spend = spend_col,
+    planned_units = blank(units_col),
+    planned_rate  = blank(rate_col),
+    unit_type     = blank(unit_type_col),
     name          = name,
     nickname      = nickname,
     advertiser    = advertiser,

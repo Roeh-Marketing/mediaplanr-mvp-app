@@ -37,24 +37,42 @@ guess_cols <- function(df) {
   }
 
   spend <- pick(c("^planned_spend$", "^spend$", "budget", "cost", "investment"))
-  week  <- pick(c("^week$", "^date$", "week_start", "^wk$", "period"))
+  # NB: no "period" pattern here -- it matches the reserved `period_basis`
+  # column, which is not a week and is not even dateish, so the seeded
+  # selection would silently fail to apply.
+  week  <- pick(c("^week$", "^date$", "week_start", "^wk$"))
+
+  units <- pick(c("^planned_units$", "^units$", "impression", "click", "grp",
+                  "^spots?$", "delivery"))
+  rate  <- pick(c("^planned_rate$", "^rate$", "^cpm$", "^cpc$", "^cpp$",
+                  "unit_cost"))
+  unit_type <- pick(c("^unit_type$", "^unit$", "buying_unit", "^medium$"))
 
   # Anything character/factor with a sane number of distinct values is a
-  # plausible grain column.
+  # plausible grain column -- except the columns mediaplanr reserves. Those are
+  # character too, so without this they get auto-selected INTO the grain, from
+  # where they pollute the grid's sticky columns, the mix chart's dimension,
+  # the delta chart's labels and the Compare cell table.
+  reserved <- c(mediaplanr::flight_cols(), mediaplanr::unit_cols())
   cand <- nms[vapply(df, function(c) is.character(c) || is.factor(c), logical(1))]
-  cand <- setdiff(cand, c(spend, week))
+  cand <- setdiff(cand, c(spend, week, units, rate, unit_type, reserved))
   grain <- cand[vapply(cand, function(c) {
     k <- length(unique(df[[c]]))
     k > 1 && k <= max(50, nrow(df) / 2)
   }, logical(1))]
 
-  list(spend = spend, week = week, grain = grain)
+  list(spend = spend, week = week, grain = grain,
+       units = units, rate = rate, unit_type = unit_type)
 }
 
 # Is a column safely coercible to Date? Used to decide whether to offer it as
 # the week column.
 is_dateish <- function(x) {
-  if (inherits(x, "Date")) return(TRUE)
+  # POSIXct matters: readxl returns every date cell as POSIXct, so without this
+  # an exported workbook re-uploads with its week column not even offered in
+  # the mapping dropdown -- the round trip the README advertises silently
+  # loses the plan's time dimension.
+  if (inherits(x, "Date") || inherits(x, "POSIXct")) return(TRUE)
   if (!is.character(x) && !is.factor(x)) return(FALSE)
   v <- suppressWarnings(tryCatch(as.Date(as.character(x)),
                                  error = function(e) NA))
