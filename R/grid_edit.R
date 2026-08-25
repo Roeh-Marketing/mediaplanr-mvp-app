@@ -56,56 +56,134 @@ plan_wide <- function(plan) {
   list(df = out, li_grain = lg, weeks = wcols, value_cols = wcols)
 }
 
-# Turn accumulated cell edits into the named numeric vector build_scenario()
-# takes, keyed by the plan's FULL grain (line item + week).
+# A grid edit becomes an OPERATION, not a raw cell value.
 #
-# edits: named list/vector of cell_key -> value.
-edits_to_vector <- function(plan, edits) {
-  if (!length(edits)) return(numeric(0))
+# The distinction that matters: a cell the plan actually has becomes a `set` on
+# that one grain cell, while a cell the grid drew but the plan has no row for --
+# a week a buy does not run -- becomes an `add`. The grid is a dense matrix over
+# every line item x week, so on a flight-authored plan most cells are the second
+# kind. Before this they were silently swallowed on save.
+cell_edit_op <- function(plan, key, value) {
   d  <- plan@data
-  lg <- mediaplanr::line_item_grain(plan)
+  lg <- setdiff(mediaplanr::line_item_grain(plan), mediaplanr::flight_cols())
   wk <- plan@week_col
-  full_keys <- mediaplanr::line_item(d, plan@grain)
-  li_keys   <- mediaplanr::line_item(d, lg)
+  parts <- split_cell_key(key)
 
-  out <- numeric(0)
-  for (k in names(edits)) {
-    parts <- split_cell_key(k)
-    if (!length(wk) || is.na(parts$week)) {
-      hit <- which(li_keys == parts$line_item)
-    } else {
-      hit <- which(li_keys == parts$line_item &
-                     as.character(d[[wk]]) == parts$week)
-    }
-    if (!length(hit)) next   # cell no longer exists (plan changed underneath)
-    out[full_keys[hit[1]]] <- as.numeric(edits[[k]])
+  li_keys <- mediaplanr::line_item(d, lg)
+  hit <- if (!length(wk) || is.na(parts$week)) {
+    which(li_keys == parts$line_item)
+  } else {
+    which(li_keys == parts$line_item & as.character(d[[wk]]) == parts$week)
   }
-  out
+
+  if (length(hit)) {
+    # The row exists: target it by its full grain so the op is unambiguous.
+    target <- lapply(stats::setNames(plan@grain, plan@grain),
+                     function(g) as.character(d[[g]][hit[1]]))
+    return(list(target = target, set = as.numeric(value)))
+  }
+
+  # No such row. Recover the line item's values from any other row of it, so
+  # the added row lands on the same line item rather than a new one.
+  src <- which(li_keys == parts$line_item)
+  if (!length(src)) return(NULL)          # unknown line item; nothing to add to
+  spec <- lapply(stats::setNames(lg, lg), function(g) as.character(d[[g]][src[1]]))
+  if (length(wk) && !is.na(parts$week)) spec[[wk]] <- parts$week
+  spec$planned_spend <- as.numeric(value)
+  list(add = spec)
+}
+
+# Ops are applied in order, so typing repeatedly in one cell would append a new
+# `set` every time. Replace instead: same cell, same op kind, one entry.
+stage_op <- function(ops, op) {
+  k <- .op_cell_key(op)
+  if (!is.null(k)) {
+    keep <- vapply(ops, function(o) !identical(.op_cell_key(o), k), logical(1))
+    ops <- ops[keep]
+  }
+  c(ops, list(op))
+}
+
+# The single grain cell an op addresses, or NULL if it addresses more than one.
+# Only these coalesce; a broad operation is a distinct act each time.
+.op_cell_key <- function(op) {
+  if (!is.null(op$add)) {
+    return(paste0("add:", paste(unlist(op$add[setdiff(names(op$add), "planned_spend")]),
+                                collapse = "\u001f")))
+  }
+  if (is.null(op$set) || is.null(op$target)) return(NULL)
+  paste0("set:", paste(unlist(op$target), collapse = "\u001f"))
+}
+
+# One staged operation, in words, for the review list.
+describe_op <- function(op, plan) {
+  money <- function(x) fmt_money(as.numeric(x))
+  where <- function(t) {
+    if (is.null(t) || !length(t)) return("the whole plan")
+    paste(vapply(names(t), function(n)
+      paste0(n, " ", paste(as.character(t[[n]]), collapse = "/")), character(1)),
+      collapse = ", ")
+  }
+  d <- if (!is.null(op$during))
+    sprintf(" in market %s to %s", op$during$from, op$during$to) else ""
+
+  if (!is.null(op$add)) {
+    lg <- setdiff(names(op$add), c("planned_spend", "flight_start", "flight_end"))
+    return(sprintf("Add %s at %s",
+                   paste(unlist(op$add[lg]), collapse = " / "),
+                   money(op$add$planned_spend)))
+  }
+  if (isTRUE(op$drop))     return(sprintf("Drop %s%s", where(op$target), d))
+  if (!is.null(op$shift))  return(sprintf("Shift %s by %s days%s", where(op$target), op$shift, d))
+  if (!is.null(op$restage))
+    return(sprintf("Restage %s to %s - %s", where(op$target), op$restage$from, op$restage$to))
+  if (!is.null(op$set))    return(sprintf("Set %s%s to %s", where(op$target), d, money(op$set)))
+  if (!is.null(op$total))  return(sprintf("Make %s%s total %s", where(op$target), d, money(op$total)))
+  if (!is.null(op$delta))  return(sprintf("Move %s's%s total by %s", where(op$target), d, money(op$delta)))
+  if (!is.null(op$delta_each))
+    return(sprintf("Add %s to each row of %s%s", money(op$delta_each), where(op$target), d))
+  if (!is.null(op$scale))  return(sprintf("Scale %s%s by %s", where(op$target), d, op$scale))
+  "Operation"
 }
 
 # The editable grid. Spend cells render as number inputs carrying their cell
 # key; www/grid.js delegates their change events back to Shiny.
-plan_grid <- function(plan, pending = list(), editable = TRUE) {
+# Cells where two plans disagree, as cell keys. Covers rows that exist in one
+# and not the other, so an added or dropped line item highlights too.
+changed_cells <- function(base, other) {
+  lg <- setdiff(mediaplanr::line_item_grain(base), mediaplanr::flight_cols())
+  wk <- base@week_col
+  key <- function(p) {
+    d <- p@data
+    if (!nrow(d)) return(character(0))
+    cell_key(mediaplanr::line_item(d, lg),
+             if (length(wk)) as.character(d[[wk]]) else NA)
+  }
+  kb <- key(base); ko <- key(other)
+  vb <- stats::setNames(base@data$planned_spend, kb)
+  vo <- stats::setNames(other@data$planned_spend, ko)
+  all_k <- union(kb, ko)
+  b <- ifelse(is.na(vb[all_k]), 0, vb[all_k])
+  o <- ifelse(is.na(vo[all_k]), 0, vo[all_k])
+  all_k[b != o]
+}
+
+# `plan` is the STAGED plan -- the active plan with the pending ops already
+# applied -- so the grid is a straight render of it rather than an overlay.
+# `baseline` is the unstaged plan, used only to work out which cells to
+# highlight as dirty.
+plan_grid <- function(plan, baseline = NULL, editable = TRUE) {
   w <- plan_wide(plan)
   df <- w$df
   lg <- w$li_grain
 
-  # Overlay staged edits so the grid shows what the user typed, not what is
-  # committed -- pending edits are not in the plan yet by design.
-  if (length(pending)) {
-    for (k in names(pending)) {
-      p <- split_cell_key(k)
-      r <- which(df$.li == p$line_item)
-      cc <- if (is.na(p$week)) "planned_spend" else p$week
-      if (length(r) && cc %in% names(df)) df[r[1], cc] <- as.numeric(pending[[k]])
-    }
-  }
-
   df$Total <- rowSums(df[, w$value_cols, drop = FALSE], na.rm = TRUE)
 
-  # names(list()) is NULL, and toJSON(NULL) emits `{}` -- which would give the
-  # cell renderer `{}.indexOf(...)` and break every cell. Force a JSON array.
-  edited_keys <- as.character(names(pending))
+  # Dirty cells are wherever the staged plan differs from the unstaged one.
+  # Derived rather than tracked, so an operation touching forty cells lights up
+  # all forty without anyone enumerating them.
+  edited_keys <- if (is.null(baseline)) character(0) else
+    changed_cells(baseline, plan)
   if (!length(edited_keys)) edited_keys <- character(0)
 
   value_col_def <- function(colname) {

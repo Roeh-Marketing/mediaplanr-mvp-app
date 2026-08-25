@@ -29,10 +29,35 @@ nav_panel(
             "scale by"        = "scale"),
           "To each matched row" = c(
             "set each to"     = "set",
-            "add to each"     = "delta_each"))),
-        numericInput("op_value", "Value", value = 1.1, step = 0.1)
+            "add to each"     = "delta_each"),
+          "Change which rows there are" = c(
+            "drop"            = "drop",
+            "add a line item" = "add",
+            "shift by days"   = "shift",
+            "restage to"      = "restage"))),
+        # drop needs no value and restage needs two dates, so the numeric input
+        # is not universal any more.
+        conditionalPanel(
+          "input.op_kind != 'drop' && input.op_kind != 'restage'",
+          numericInput("op_value", "Value", value = 1.1, step = 0.1)
+        )
+      ),
+      conditionalPanel(
+        "input.op_kind == 'restage'",
+        dateRangeInput("op_restage", "New in-market dates", start = NULL, end = NULL)
+      ),
+      conditionalPanel(
+        "input.op_kind == 'add'",
+        div(class = "form-text mb-1", "The new line item:"),
+        uiOutput("scn_add_inputs")
+      ),
+      checkboxInput("op_use_during", "Only rows in market during...", value = FALSE),
+      conditionalPanel(
+        "input.op_use_during == true",
+        dateRangeInput("op_during", label = NULL, start = NULL, end = NULL)
       ),
       div(class = "form-text mb-2 mt-n2", textOutput("op_hint", inline = TRUE)),
+      uiOutput("scn_staged_list"),
       actionButton("op_stage", "Stage this change", icon = icon("wand-magic-sparkles"),
                    class = "btn-sm btn-outline-primary w-100"),
 

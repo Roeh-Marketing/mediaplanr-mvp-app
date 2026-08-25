@@ -68,28 +68,50 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
     tagList(controls)
   })
 
+  # `add` names a line item that does not exist yet, so it needs free text
+  # rather than the target selectors, which only offer existing values.
+  output$scn_add_inputs <- renderUI({
+    p <- active_plan()
+    lg <- setdiff(mediaplanr::line_item_grain(p), mediaplanr::flight_cols())
+    ctrls <- lapply(lg, function(g) {
+      textInput(paste0("add_", g), tools::toTitleCase(g), value = "")
+    })
+    if (length(p@week_col)) {
+      wks <- as.character(mediaplanr::grain_values(p, p@week_col))
+      ctrls <- c(ctrls, list(selectInput("add_week", "Week", choices = wks)))
+    }
+    tagList(ctrls)
+  })
+
   output$op_hint <- renderText({
     switch(input$op_kind %||% "total",
       scale      = "1.2 raises matched rows 20%; 0.5 halves them.",
       delta      = "Moves the matched rows' TOTAL by this, keeping their mix. Negative to cut.",
       set        = "Every matched row becomes exactly this -- so the total is this times the row count.",
       delta_each = "Added to EVERY matched row -- so the total moves by this times the row count.",
-      total      = "Matched rows are rescaled to sum to this, keeping their mix.")
+      total      = "Matched rows are rescaled to sum to this, keeping their mix.",
+      drop       = "Removes the matched rows entirely. Not the same as setting them to zero.",
+      add        = "Introduces a line item the plan does not have. Spend goes in Value.",
+      shift      = "Moves the matched buys by this many days. Negative moves earlier.",
+      restage    = "Moves the matched buys to the dates above. Needs a plan with flights.")
   })
 
   observeEvent(input$op_kind, {
     updateNumericInput(session, "op_value",
       value = switch(input$op_kind, scale = 1.1, delta = 50000,
-                     delta_each = 5000, set = 25000, total = 500000),
-      step = switch(input$op_kind, scale = 0.05, 5000))
+                     delta_each = 5000, set = 25000, total = 500000,
+                     shift = 7, add = 25000, 1),
+      step = switch(input$op_kind, scale = 0.05, shift = 1, 5000))
   })
 
-  # An operation is applied to the *staged* plan, then flattened back into
-  # pending cell edits -- so the grid shows its effect immediately and the user
-  # can keep editing on top of it before committing.
+  # A staged operation is appended to the pending list and replayed. It is no
+  # longer diffed back into cell values -- that could not represent add, drop,
+  # shift or restage, because the diff walked the BASE plan's rows and those ops
+  # change which rows there are.
   observeEvent(input$op_stage, {
-    p <- active_plan()
-    lg <- mediaplanr::line_item_grain(p)
+    p  <- active_plan()
+    lg <- setdiff(mediaplanr::line_item_grain(p), mediaplanr::flight_cols())
+    kind <- input$op_kind %||% "total"
 
     target <- list()
     for (g in lg) {
@@ -101,75 +123,105 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
       if (length(v)) target[[p@week_col]] <- as.Date(v)
     }
 
-    val <- input$op_value
-    if (!is.finite(val)) {
-      showNotification("Enter a numeric value.", type = "warning"); return()
-    }
     op <- list(target = if (length(target)) target else NULL)
-    op[[input$op_kind]] <- val
 
-    staged <- staged_plan()
-    res <- tryCatch(
-      mediaplanr::build_scenario(staged, edits = list(op), name = "staging"),
-      error = function(e) e)
-    if (inherits(res, "error")) {
-      showNotification(conditionMessage(res), type = "error", duration = 8); return()
+    # `during` is a selector, not an operation: it rides alongside any of them.
+    if (isTRUE(input$op_use_during)) {
+      if (is.null(input$op_during) || length(input$op_during) < 2) {
+        showNotification("Pick both dates for the in-market window.", type = "warning"); return()
+      }
+      op$during <- list(from = as.character(input$op_during[1]),
+                        to   = as.character(input$op_during[2]))
     }
 
-    pending(diff_to_pending(active_plan(), res))
-    showNotification("Change staged — review the grid, then Save scenario.",
+    # Each operation takes a different shape of value; a single numeric input
+    # only ever fitted the spend ones.
+    if (kind == "drop") {
+      op$drop <- TRUE
+    } else if (kind == "restage") {
+      if (is.null(input$op_restage) || length(input$op_restage) < 2) {
+        showNotification("Pick the new start and end dates.", type = "warning"); return()
+      }
+      op$restage <- list(from = as.character(input$op_restage[1]),
+                         to   = as.character(input$op_restage[2]))
+    } else if (kind == "add") {
+      spec <- list()
+      for (g in lg) {
+        v <- input[[paste0("add_", g)]]
+        if (!nzchar(v %||% "")) {
+          showNotification(paste0("Give a value for ", g, "."), type = "warning"); return()
+        }
+        spec[[g]] <- v
+      }
+      if (length(p@week_col)) spec[[p@week_col]] <- as.character(input$add_week)
+      if (!is.finite(input$op_value %||% NA)) {
+        showNotification("Enter a spend for the new line item.", type = "warning"); return()
+      }
+      spec$planned_spend <- input$op_value
+      op <- list(add = spec)                       # add takes no target
+    } else {
+      val <- input$op_value
+      if (!is.finite(val)) {
+        showNotification("Enter a numeric value.", type = "warning"); return()
+      }
+      op[[kind]] <- val
+    }
+
+    # Validate by replaying before accepting it, so a bad op is refused here
+    # with the package's own message rather than breaking the grid.
+    trial <- tryCatch(
+      mediaplanr::build_scenario(active_plan(), edits = c(pending(), list(op)),
+                                 name = "staging"),
+      error = function(e) e)
+    if (inherits(trial, "error")) {
+      showNotification(conditionMessage(trial), type = "error", duration = 10); return()
+    }
+
+    pending(stage_op(pending(), op))
+    showNotification("Change staged - review the grid, then Save scenario.",
                      type = "message", duration = 4)
   })
 
-  # The active plan with staged edits applied. Used by the op handler so
-  # operations compose, and by save.
-  staged_plan <- function() {
-    p <- active_plan()
+  # The active plan with the pending ops replayed, in order. Measured at about
+  # 0.1 ms an op on a 104-row plan, so this is cheap enough to do on render.
+  staged_plan <- reactive({
+    p  <- active_plan()
     pe <- pending()
     if (!length(pe)) return(p)
-    v <- edits_to_vector(p, pe)
-    if (!length(v)) return(p)
-    mediaplanr::build_scenario(p, edits = v, name = "staging")
-  }
-
-  # Every cell where two plans differ, as pending edits.
-  diff_to_pending <- function(base, other) {
-    lg <- mediaplanr::line_item_grain(base)
-    wk <- base@week_col
-    b <- base@data; o <- other@data
-    kb <- mediaplanr::line_item(b, base@grain)
-    ko <- mediaplanr::line_item(o, other@grain)
-    idx <- match(kb, ko)
-    changed <- which(!is.na(idx) & b$planned_spend != o$planned_spend[idx])
-    out <- list()
-    if (!length(changed)) return(out)
-    li <- mediaplanr::line_item(b, lg)
-    for (i in changed) {
-      k <- if (length(wk)) cell_key(li[i], as.character(b[[wk]][i])) else
-        cell_key(li[i], NA)
-      out[[k]] <- o$planned_spend[idx[i]]
-    }
-    out
-  }
+    tryCatch(mediaplanr::build_scenario(p, edits = pe, name = "staging"),
+             error = function(e) p)
+  })
 
   # --- grid --------------------------------------------------------------
+  # Typing in a cell is an operation like any other: a `set` when the row
+  # exists, an `add` when it does not. The second case is why a flight plan's
+  # empty weeks are now editable rather than silently swallowing the edit.
   observeEvent(input$grid_edit, {
     e <- input$grid_edit
     req(e$key)
-    pe <- pending()
-    pe[[e$key]] <- as.numeric(e$value)
-    pending(pe)
+    op <- cell_edit_op(active_plan(), e$key, e$value)
+    if (is.null(op)) {
+      showNotification("That cell is not part of the plan.", type = "warning"); return()
+    }
+    trial <- tryCatch(
+      mediaplanr::build_scenario(active_plan(), edits = stage_op(pending(), op),
+                                 name = "staging"),
+      error = function(e) e)
+    if (inherits(trial, "error")) {
+      showNotification(conditionMessage(trial), type = "error", duration = 8); return()
+    }
+    pending(stage_op(pending(), op))
   })
 
   output$scn_grid <- reactable::renderReactable({
-    plan_grid(active_plan(), pending = pending(), editable = TRUE)
+    plan_grid(staged_plan(), baseline = active_plan(), editable = TRUE)
   })
 
   output$grid_badge <- renderUI({
     n <- length(pending())
-    if (!n) return(tags$span(class = "badge bg-light text-muted", "no pending edits"))
+    if (!n) return(tags$span(class = "badge bg-light text-muted", "no pending changes"))
     tags$span(class = "badge bg-warning text-dark",
-              sprintf("%d pending edit%s", n, if (n == 1) "" else "s"))
+              sprintf("%d pending change%s", n, if (n == 1) "" else "s"))
   })
 
   output$scn_pending_note <- renderUI({
@@ -182,10 +234,38 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
                           error = function(e) NA_real_)
     old_total <- sum(p@data$planned_spend)
     div(class = "small mb-2",
-        sprintf("%d edit%s · ", length(pe), if (length(pe) == 1) "" else "s"),
+        sprintf("%d change%s - ", length(pe), if (length(pe) == 1) "" else "s"),
         tags$b(fmt_money(new_total)),
         tags$span(class = if (isTRUE(new_total >= old_total)) "text-success" else "text-danger",
                   " (", fmt_delta(new_total - old_total), ")"))
+  })
+
+  # The staged list, in words, with an x per row. Until now the only affordance
+  # was Discard All: one mistyped cell meant losing every other staged change.
+  output$scn_staged_list <- renderUI({
+    pe <- pending()
+    if (!length(pe)) return(NULL)
+    p <- active_plan()
+    rows <- lapply(seq_along(pe), function(i) {
+      div(class = "d-flex align-items-start gap-2 py-1 border-bottom small",
+          tags$span(class = "text-muted", style = "min-width:1.2rem;", paste0(i, ".")),
+          tags$span(class = "flex-grow-1", describe_op(pe[[i]], p)),
+          actionLink(paste0("undo_op_", i), label = NULL, icon = icon("xmark"),
+                     class = "text-muted", title = "Undo this change"))
+    })
+    div(class = "mb-2", rows)
+  })
+
+  # One observer per slot, created once. Shiny inputs are not removed when the
+  # UI that made them goes away, so these are registered up to a ceiling rather
+  # than rebuilt per render -- rebuilding would stack duplicate handlers.
+  lapply(seq_len(50), function(i) {
+    observeEvent(input[[paste0("undo_op_", i)]], {
+      pe <- pending()
+      if (i > length(pe)) return()
+      pending(pe[-i])
+      showNotification("Change removed.", type = "message", duration = 2)
+    }, ignoreInit = TRUE)
   })
 
   observeEvent(input$scn_discard, {
@@ -202,10 +282,9 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
       showNotification("A scenario name is required.", type = "warning"); return()
     }
     p <- active_plan()
-    v <- edits_to_vector(p, pe)
     res <- tryCatch(
       mediaplanr::build_scenario(
-        p, edits = v, name = input$new_name,
+        p, edits = pe, name = input$new_name,
         nickname = input$new_nickname %||% "",
         status = input$new_status %||% "in development"),
       error = function(e) e)
