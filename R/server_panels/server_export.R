@@ -135,4 +135,39 @@ server_export <- function(input, output, session, st, bump) {
         sprintf("%d scenario%s available.", length(store_scenario_names(st)),
                 if (length(store_scenario_names(st)) == 1) "" else "s"))
   })
+
+  # --- JSON: the lossless one --------------------------------------------
+  #
+  # plan_to_json() writes the whole ScenarioSet at schema 2, which is the only
+  # export here that survives a subplan tree. The xlsx round trip is a flat
+  # table per scenario and drops structure, so the note says which plans are
+  # affected rather than leaving it to be found out later.
+  output$exp_json_note <- renderUI({
+    bump()
+    if (!store_has_plan(st)) return(empty_state("No plan yet.", "code"))
+    topline <- Filter(function(nm) length(store_get(st, nm)@subplans) > 0,
+                      store_scenario_names(st))
+    if (!length(topline)) {
+      return(p(class = "small text-muted mb-2",
+               "No scenario has subplans, so the workbook is lossless too."))
+    }
+    div(class = "alert alert-warning small py-2 mb-2",
+        icon("triangle-exclamation"), " ",
+        sprintf("%s %s subplans. The workbook above would flatten %s to plain rows; this keeps the tree.",
+                paste(topline, collapse = ", "),
+                if (length(topline) == 1) "has" else "have",
+                if (length(topline) == 1) "it" else "them"))
+  })
+
+  output$exp_json <- downloadHandler(
+    filename = function() {
+      paste0(gsub("[^A-Za-z0-9]+", "_", store_base(st)@name), "_",
+             format(Sys.Date(), "%Y%m%d"), ".json")
+    },
+    content = function(file) {
+      req(store_has_plan(st))
+      mediaplanr::plan_to_json(st$set, path = file, pretty = TRUE)
+    },
+    contentType = "application/json"
+  )
 }

@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Compare page: tables and charts across the selected scenarios.
+# Review -> Compare: tables and charts across the selected scenarios.
 # ---------------------------------------------------------------------------
 
 server_compare <- function(input, output, session, st, bump) {
@@ -50,7 +50,7 @@ server_compare <- function(input, output, session, st, bump) {
   output$cmp_kpis <- renderUI({
     bump()
     if (!store_has_plan(st)) {
-      return(card(card_body(empty_state("Build a plan first.", "chart-simple"))))
+      return(card(card_body(empty_state("Build a plan on the Build tab first.", "chart-simple"))))
     }
     s <- mediaplanr::compare_scenarios(st$set, "summary")
     sel <- selected()
@@ -95,6 +95,10 @@ server_compare <- function(input, output, session, st, bump) {
       `vs base` = s$spend_vs_base,
       `%`      = s$spend_pct_vs_base,
       check.names = FALSE, stringsAsFactors = FALSE)
+    # The vapply() columns above arrive named, which data.frame() turns into row
+    # names -- and reactable shows row names whenever it finds them, so the table
+    # grew a nameless leading column repeating the scenario label.
+    rownames(tbl) <- NULL
 
     reactable::reactable(
       tbl, compact = TRUE, bordered = TRUE, highlight = TRUE, pagination = FALSE,
@@ -152,6 +156,19 @@ server_compare <- function(input, output, session, st, bump) {
     p <- chart_deltas(st$set, scn)
     if (is.null(p)) blank("No differences against the baseline") else p
   }, bg = "transparent")
+
+  # The one chart the four above cannot draw: a line per line item across the
+  # scenarios, so you can follow where a single buy went rather than reading
+  # its arrival and departure off two different bars. Built by mediaplanr.viz
+  # from the same compare_scenarios(set, "cell") frame the table below uses,
+  # so the picture and the numbers cannot disagree.
+  output$cmp_move <- echarts4r::renderEcharts4r({
+    req(has_any())
+    cmp <- mediaplanr::compare_scenarios(st$set, "cell")
+    cmp <- cmp[cmp$scenario %in% selected(), , drop = FALSE]
+    req(nrow(cmp))
+    mediaplanr.viz::as_widget(mediaplanr.viz::ec_compare(cmp))
+  })
 
   # --- cell table --------------------------------------------------------
   output$cmp_cells <- reactable::renderReactable({

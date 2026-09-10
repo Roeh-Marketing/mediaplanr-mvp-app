@@ -194,7 +194,7 @@ make_plan_tools <- function(st) {
 
   tool_set_active <- tool(
     function(scenario) set_active_tool(st, scenario),
-    description = "Switch which scenario the Scenarios page is editing.",
+    description = "Switch which scenario the Edit page is working on.",
     arguments = list(scenario = type_string("Scenario label"))
   )
 
@@ -214,7 +214,168 @@ make_plan_tools <- function(st) {
     )
   )
 
+  # --- designing a plan from nothing -------------------------------------
+
+  tool_list_skills <- tool(
+    function() list_skills_tool(),
+    description = paste0(
+      "List what you can do in this app, with an example phrasing of each. ",
+      "Use it when the user asks what you can help with, or when you are not ",
+      "sure a request is something this app does."
+    )
+  )
+
+  tool_suggest_dims <- tool(
+    function() suggest_dimensions_tool(),
+    description = paste0(
+      "The dimension names planners conventionally use (channel, partner, ",
+      "campaign, target_audience, ...), the known unit types, and the pacing ",
+      "shapes. SUGGESTIONS ONLY -- any column name is valid, and a plan keyed ",
+      "on media_type or vehicle is equally correct. Offer these, do not impose ",
+      "them."
+    )
+  )
+
+  tool_get_scaffold <- tool(
+    function() get_scaffold_tool(st),
+    description = paste0(
+      "Read the plan currently being designed on the Build page: its ",
+      "dimensions, the outline of its line items, its calendar, how each level ",
+      "splits its money, what is still missing, and whether it is ready to ",
+      "build. Call this FIRST when the user asks you to design or change a ",
+      "plan under construction. It reports no spend figures -- that is ",
+      "preview_scaffold."
+    )
+  )
+
+  tool_set_scaffold <- tool(
+    function(patch_json) set_scaffold_tool(st, patch_json),
+    description = paste0(
+      "Change the plan being designed. `patch_json` is a JSON OBJECT holding ",
+      "only the parts you are changing; everything else is left alone, and the ",
+      "Build form updates to match.\n\n",
+      "Shape:\n",
+      "  dimensions - array, coarsest first: [\"channel\",\"partner\"]\n",
+      "  time       - {basis:\"weekly\"|\"flights\"|\"none\", start:\"YYYY-MM-DD\", ",
+      "n_weeks:13, week_start:\"Monday\"}\n",
+      "  budget     - {total:2000000, round_to:0.01}\n",
+      "  meta       - {name:, nickname:, advertiser:, planner:}\n",
+      "  measures   - {unit_type:\"impression\", rate:5}\n",
+      "  defaults   - {pacing:\"flat\"}\n",
+      "  tree       - {split:\"share\"|\"weight\"|\"equal\", children:[node, ...]}\n\n",
+      "A node is {name, alloc, split, pacing, from, to, amount, children}. ",
+      "`alloc` is read by the PARENT's split: a fraction under \"share\" (0.55 ",
+      "= 55%), a relative number under \"weight\" (x3), ignored under ",
+      "\"equal\". `pacing` is one of flat, ramp, front, back, burst. `from`/",
+      "`to` give a leaf its own in-market window. A node with no `children` is ",
+      "a line item.\n\n",
+      "`children` MERGES BY NAME, so you need not resend a whole roster: an ",
+      "existing name updates in place, a new name is appended, and ",
+      "{\"name\":\"ESPN\",\"drop\":true} removes one. Every other array ",
+      "replaces. JSON null deletes a key.\n\n",
+      "Example -- 'TV 55 split 60/40 NBC and ESPN, Search 25, Social 20':\n",
+      "{\"tree\":{\"split\":\"share\",\"children\":[",
+      "{\"name\":\"TV\",\"alloc\":0.55,\"split\":\"share\",\"children\":[",
+      "{\"name\":\"NBC\",\"alloc\":0.6},{\"name\":\"ESPN\",\"alloc\":0.4}]},",
+      "{\"name\":\"Search\",\"alloc\":0.25},",
+      "{\"name\":\"Social\",\"alloc\":0.2}]}}\n\n",
+      "NEVER state per-week or per-line-item spend. State the RULE -- a share, ",
+      "a weight, or a single `amount` the user gave you -- and let R divide it. ",
+      "The result returns what is still missing; ask about one thing at a time."
+    ),
+    arguments = list(
+      patch_json = type_string("JSON object patching the recipe (see description)")
+    )
+  )
+
+  tool_preview_scaffold <- tool(
+    function() preview_scaffold_tool(st),
+    description = paste0(
+      "What the designed plan would come out as: every line item with the ",
+      "amount, share, pacing and number of weeks it actually gets, plus the ",
+      "row count and total. Read-only -- it builds nothing. This is the ONLY ",
+      "source of spend figures for a plan under design; do not quote amounts ",
+      "you have not seen here."
+    )
+  )
+
+  tool_build_scaffold <- tool(
+    function(name = NULL, nickname = NULL) build_from_scaffold_tool(st, name, nickname),
+    description = paste0(
+      "Build the designed plan for real and put it in the registry as the ",
+      "baseline. This REPLACES anything already loaded, so confirm with the ",
+      "user first if a plan is already in the session. Show them ",
+      "preview_scaffold's numbers before calling this."
+    ),
+    arguments = list(
+      name     = type_string("Plan name, if not already set", required = FALSE),
+      nickname = type_string("Short handle for the baseline", required = FALSE)
+    )
+  )
+
+  # --- structure ----------------------------------------------------------
+
+  tool_structure <- tool(
+    function(scenario = NULL) plan_structure_tool(st, scenario),
+    description = paste0(
+      "What hangs beneath a plan: every plan in its subplan tree, which cells ",
+      "a subplan backs (read-only on the parent, because their number IS the ",
+      "subplan's rollup), and which cells the plan still owns and can be ",
+      "edited here. Call it before editing a plan that might be a topline -- ",
+      "apply_edits refuses a backed cell, and this says so first."
+    ),
+    arguments = list(
+      scenario = type_string("Scenario label. Omit for the active one.",
+                             required = FALSE)
+    )
+  )
+
+  tool_seed_subplan <- tool(
+    function(key, scenario = NULL) seed_subplan_tool(st, key, scenario),
+    description = paste0(
+      "Start designing a SUBPLAN for one cell -- 'plan TV in detail'. It fills ",
+      "the Design form with a recipe seeded from the parent: the parent's ",
+      "grain, that cell's money and the parent's calendar, so what you build ",
+      "is guaranteed to attach.\n\n",
+      "`key` is the cell as the plan names it -- 'TV', or 'TV | NBC' when the ",
+      "line item has two columns. plan_structure lists them.\n\n",
+      "Then refine it with set_scaffold: add a finer dimension and split the ",
+      "cell beneath it (a TV cell becomes TV -> NBC, ESPN). Calling ",
+      "build_from_scaffold afterwards ATTACHES it to that cell rather than ",
+      "starting a new plan."
+    ),
+    arguments = list(
+      key      = type_string("The cell to refine, e.g. 'TV' or 'TV | NBC'"),
+      scenario = type_string("Scenario to attach to. Omit for the active one.",
+                             required = FALSE)
+    )
+  )
+
+  tool_detach <- tool(
+    function(key, scenario = NULL) detach_subplan_tool(st, key, scenario),
+    description = paste0(
+      "Release a cell from the subplan backing it. The cell keeps the numbers ",
+      "the subplan gave it and becomes editable on the parent again; the ",
+      "subplan itself is not deleted, it just stops owning the cell. This is ",
+      "not an edit and forks nothing."
+    ),
+    arguments = list(
+      key      = type_string("The backed cell to release, e.g. 'TV'"),
+      scenario = type_string("Scenario label. Omit for the active one.",
+                             required = FALSE)
+    )
+  )
+
   list(
+    plan_structure     = tool_structure,
+    seed_subplan       = tool_seed_subplan,
+    detach_subplan     = tool_detach,
+    list_skills        = tool_list_skills,
+    suggest_dimensions = tool_suggest_dims,
+    get_scaffold       = tool_get_scaffold,
+    set_scaffold       = tool_set_scaffold,
+    preview_scaffold   = tool_preview_scaffold,
+    build_from_scaffold = tool_build_scaffold,
     describe_plan      = tool_describe,
     list_scenarios     = tool_list,
     apply_edits        = tool_apply_edits,
@@ -240,7 +401,13 @@ make_plan_agent <- function(
 ) {
   if (!nzchar(api_key)) return(NULL)   # chat degrades to a hint in the UI
 
+  # The skills roster is substituted rather than duplicated: R/skills.R is the
+  # one declaration, and the chips on the page, the `list_skills` tool and this
+  # prompt are three renderings of it. Written out by hand in both places, they
+  # would drift within a week.
   system_prompt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  system_prompt <- sub("{{SKILLS}}", skills_prompt_block(), system_prompt,
+                       fixed = TRUE)
   chat <- chat_anthropic(system_prompt = system_prompt,
                          credentials = function() list(`x-api-key` = api_key),
                          model = model)

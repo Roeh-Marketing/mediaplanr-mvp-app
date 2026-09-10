@@ -1,16 +1,18 @@
 # ---------------------------------------------------------------------------
-# Scenarios page: the editing workbench.
+# Edit page: the editing workbench.
 #
 # Three ways to change spend, one commit point. Grid edits and staged
 # operations both accumulate into `pending`; nothing becomes a scenario until
 # Save is pressed. The chat is the exception -- the agent's apply_edits tool
 # creates a scenario directly, because a chat instruction is already a complete
 # thought ("make it 20% bigger"), not a half-finished edit.
+#
+# The chat itself lives in the navbar drawer and is owned by app_server, so it
+# is one conversation across every page rather than a card on this one. This
+# module keeps the two input modes it does own.
 # ---------------------------------------------------------------------------
 
-server_scenarios <- function(input, output, session, st, bump, agent) {
-
-  save_plot <- make_chat_plot_saver(session)
+server_scenarios <- function(input, output, session, st, bump) {
 
   # Staged cell edits: cell_key -> value. Cleared on save, discard, or switch.
   pending <- reactiveVal(list())
@@ -288,7 +290,7 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
       mediaplanr::build_scenario(
         p, edits = pe, name = input$new_name,
         nickname = input$new_nickname %||% "",
-        status = input$new_status %||% "in development"),
+        status = "in development"),
       error = function(e) e)
     if (inherits(res, "error")) {
       showNotification(conditionMessage(res), type = "error", duration = 10); return()
@@ -299,36 +301,5 @@ server_scenarios <- function(input, output, session, st, bump, agent) {
     updateTextInput(session, "new_nickname", value = "")
     bump(bump() + 1)
     showNotification(paste0("Saved scenario '", label, "'."), type = "message")
-  })
-
-  # --- chat --------------------------------------------------------------
-  observeEvent(input$plan_chat_user_input, {
-    a <- agent()
-    if (is.null(a)) {
-      chat_append("plan_chat", paste(
-        "The assistant needs an `ANTHROPIC_API_KEY` environment variable.",
-        "Set it and restart the app; meanwhile the grid and quick operations",
-        "work as normal.")); return()
-    }
-    if (!store_has_plan(st)) {
-      chat_append("plan_chat", "Load a plan on the **Plan** page first."); return()
-    }
-    n0 <- length(a$get_turns())
-    stream <- a$stream_async(input$plan_chat_user_input)
-    promises::then(
-      chat_append("plan_chat", stream),
-      onFulfilled = function(value) {
-        # The agent may have created scenarios; refresh everything that reads
-        # the store.
-        bump(bump() + 1)
-        for (uri in extract_chat_images(a, from_turn = n0 + 1L)) {
-          url <- save_plot(uri)
-          if (!is.null(url)) {
-            chat_append("plan_chat", sprintf(
-              '<img src="%s" alt="chart" style="max-width:100%%;height:auto;border-radius:8px;">',
-              url))
-          }
-        }
-      })
   })
 }

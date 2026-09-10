@@ -19,11 +19,12 @@ forecasting and optimization stay in `mrmopt` and are out of scope here.
 ## The flow
 
 ```
-  upload / sample          edit                    fork                compare
+  BUILD                    EDIT                    EDIT                REVIEW
+  sample / upload          edit                    fork                view
   ────────────────   ─────────────────   ──────────────────   ───────────────────
-  csv or xlsx    →   editable grid   →   build_scenario()  →  summary + cell table
-  column mapping     (excel-like)        (named, status)      4 charts
-  media_plan_from_df chat ops            lineage tracked      xlsx round-trip
+  csv or xlsx    →   editable grid   →   build_scenario()  →  one plan, or all
+  column mapping     (excel-like)        (named)              summary + cell table
+  media_plan_from_df chat ops            lineage tracked      4 charts, status
         ↑                                                            │
         └──────────────── same workbook format ──────────────────────┘
 ```
@@ -33,10 +34,15 @@ forecasting and optimization stay in `mrmopt` and are out of scope here.
 | Page | Purpose |
 |---|---|
 | **Welcome** | What the app does and the four concepts that matter (plan = intent, line item, scenario, status). One click to load the sample. |
-| **Plan** | Upload csv/xlsx or load sample → map columns to grain/week/spend → set metadata → build the base `MediaPlan`. Validation surfaced inline. |
-| **Scenarios** | The workbench. Editable grid (line items × weeks, Excel-style), a quick-op panel, and an LLM chat — three ways to change spend. Accumulated edits become a named scenario. |
-| **Compare** | Summary table, per-cell table, and four charts across selected scenarios. |
-| **Export** | A workbook (one sheet per scenario) that re-uploads cleanly, plus xlsx/CSV of the comparison or a single scenario. |
+| **Build** | Two subtabs. *From a sample*: load, preview, build — no mapping, because a sample knows its own columns. *From a file*: upload csv/xlsx → map columns → build. Both fill the **registry** below the subtabs: one row per scenario with its metadata and an inline status editor. |
+| **Edit** | The workbench. Editable grid (line items × weeks, Excel-style), a quick-op panel, and the assistant — three ways to change spend. Cells backed by a subplan are locked. Accumulated edits become a named scenario. |
+| **Review** | Three subtabs. *Plan*: one plan whole — details, KPIs, a read-only grid, flighting, line items — and the status control. *Compare*: summary table, per-cell table and four charts across selected scenarios, plus an interactive "how spend moved". *Structure*: where each scenario came from (lineage), and what hangs beneath a plan (subplan tree, sunburst, tree table). |
+| **Export** | A workbook (one sheet per scenario) that re-uploads cleanly, JSON for the whole set (the only lossless option once a plan has subplans), plus xlsx/CSV of the comparison or a single scenario. |
+
+**Build and Edit change things; Review and Export read them.** The one thing
+Review changes is status, which is deliberate: it used to be settable only at
+build time and at save time — that is, only *before* you could see what you were
+approving.
 
 ## Key design decisions
 
@@ -64,15 +70,67 @@ chat all funnel into `build_scenario(edits=)`. The grid produces a named vector
 three shapes, so the app adds no arithmetic of its own — which matters most for
 the chat, where an LLM doing the maths is the failure mode.
 
-**5. Status is the scenario workflow.** Every scenario carries
-`in development` / `to review` / `approved`, sourced from
+**5. Status is the scenario workflow, and it is set where the plan is visible.**
+Every scenario carries `in development` / `to review` / `approved`, sourced from
 `mediaplanr::status_levels()` so the dropdown and the validator can never
-disagree. Derived scenarios reset to `in development` — the package enforces
-that an approved plan's child is not itself approved.
+disagree. A plan is *born* `in development` — neither build route nor the save
+form offers a status — and is promoted on Review → Plan, or inline in the
+registry. Both go through `store_set_status()`, which is also what the agent's
+`set_scenario_status` tool calls, so the UI and the assistant cannot disagree
+about what approving means.
 
-**6. Charts are static ggplot.** `plotly` is not installed; static plots match
-the sibling app and are enough to see a difference. Colours come from
-`_brand.yml`.
+**5b. Each build route reads a SPEC, never `input$map_*` directly.** A navset
+renders every panel into the DOM, so the two routes cannot share input ids, and
+the sample route deliberately renders no mode / week / spend picker at all --
+reading those inputs there would silently return `NULL` and take the wrong
+branch. A sample therefore ships its own mapping as `uploaded()$defaults`, and
+`do_build()` merges that with whichever controls the route actually shows.
+
+**6. Two chart libraries, each for what it is good at.** This started as
+"charts are static ggplot, because `plotly` is not installed". That reasoning
+expired when `mediaplanr.viz` shipped: the companion builds Apache ECharts
+specs from the projections `mediaplanr` already exports (`lineage()`,
+`subplan_map()`, `ownership_map()`, `compare_scenarios()`), so a chart drawn
+from one cannot drift from the package that defines it.
+
+The split now:
+
+* **ggplot**, in `plan_charts.R`, for the four comparison charts and for
+  anything the *assistant* draws. A tool result has to be an image — an ECharts
+  spec cannot be pasted into a chat turn — so `.plot_content()` keeps needing a
+  PNG.
+* **`mediaplanr.viz`**, for structure and movement: lineage, the subplan tree,
+  the sunburst, and "how spend moved" on Compare. These are interactive because
+  following one line item through a dense chart is what hover is for.
+
+The companion's charts are not replacements for the four ggplots — they answer
+different questions — so both stay.
+
+**6b. A subplan is held, not copied — so the parent's cell is read-only.**
+`attach_subplan()` replaces the parent's rows for a cell with the subplan's
+rollup and locks them; `build_scenario()` then refuses that cell. The Edit grid
+reads `@subplans` and renders those cells as values rather than inputs, with a
+lock on the line item. Offering an input the package is going to reject is a
+worse failure than not offering one.
+
+Two consequences the app had to be taught:
+
+* **Metadata edits go through `revise()`.** `store_set_status()` used to
+  hand-rebuild a `MediaPlan` from a list of slots, which silently dropped
+  `@subplans` and reset `@revision` to 1 — so approving a topline deleted the
+  detail plans hanging off it. `revise()` copies the whole plan and changes only
+  what it is asked to. Never enumerate slots.
+* **A subplan is authored through the Design form, seeded from the parent.**
+  `subplan_seed_recipe()` takes the parent's line item grain, the cell's own
+  money and the parent's calendar, so what gets built is guaranteed to attach —
+  rather than asking a planner to retype the cell and hoping it matches. Build
+  then attaches instead of replacing the session, and says so in a banner first.
+
+**6c. xlsx is lossy once a plan has structure; JSON is not.** A sheet is a
+table and a table cannot hold a tree. `plan_to_json()` writes the whole set at
+schema 2 and round-trips subplans, so it is the export offered whenever a
+scenario is a topline — and the Export page names which ones would be flattened
+rather than letting that be discovered on re-upload.
 
 **7. Excel round-trips.** A workbook uploads with **one sheet per scenario** —
 filename becomes the plan `name`, sheet name becomes the `nickname`, exactly the
@@ -91,7 +149,8 @@ mediaplanr-mvp-app/
   PLAN.md                   # this file
   _brand.yml                # shared Ro-eh brand spec
   R/
-    app_helpers.R           # formatting, column detection, empty states
+    app_helpers.R           # formatting, column detection, empty states,
+                            #   the KPI strip and the registry table
     sample_data.R           # the built-in demo plan
     plan_store.R            # session registry: base plan + scenarios
     plan_io.R               # csv / multi-sheet xlsx readers
@@ -100,8 +159,8 @@ mediaplanr-mvp-app/
     tool_wrappers.R         # plain functions the agent calls (.ok/.err)
     ellmer_tools.R          # typed tool defs + make_agent()
     ui.R / server.R
-    ui_panels/     panel_{welcome,plan,scenarios,compare,export}.R
-    server_panels/ server_{welcome,plan,scenarios,compare,export}.R
+    ui_panels/     panel_{welcome,build,scenarios,review,preview,compare,export}.R
+    server_panels/ server_{welcome,build,scenarios,preview,compare,export}.R
   prompts/system_prompt.md
   www/grid.js               # cell-edit shim
   data/sample_media_plan.csv

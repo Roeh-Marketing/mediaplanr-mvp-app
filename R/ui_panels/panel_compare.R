@@ -59,6 +59,21 @@ nav_panel(
            plotOutput("cmp_plot_deltas", height = "100%"))
     ),
 
+    # The four charts above are static ggplot and answer "how much" questions.
+    # This one answers a "which way did it move" question -- one line per line
+    # item across the scenarios -- and is interactive, because following a
+    # single line through a dense chart is exactly what hover is for.
+    card(
+      full_screen = TRUE, height = "420px",
+      card_header(
+        div(class = "d-flex justify-content-between align-items-center",
+            span("How spend moved"),
+            span(class = "small text-muted", "Hover a line to follow one line item"))
+      ),
+      card_body(class = "pt-2",
+                echarts4r::echarts4rOutput("cmp_move", height = "100%"))
+    ),
+
     card(
       full_screen = TRUE,
       card_header("By line item and week"),

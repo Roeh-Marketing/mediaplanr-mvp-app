@@ -8,7 +8,7 @@
 #     (shared by every scenario) and each sheet name becomes a @nickname.
 #
 # Reading stops at "here are the data frames". Turning them into MediaPlans
-# needs the column mapping, which the user supplies on the Plan page.
+# needs the column mapping, which the user supplies on the Build page.
 # ---------------------------------------------------------------------------
 
 # A plan name derived from a filename: drop the extension, turn separators into
@@ -162,7 +162,7 @@ build_plan_from_flights <- function(df, grain, start_col, end_col,
   df
 }
 
-# Validate a mapping against a data frame BEFORE constructing, so the Plan page
+# Validate a mapping against a data frame BEFORE constructing, so the Build page
 # can show what is wrong while the user is still choosing columns rather than
 # only failing at the moment they click Build.
 check_mapping <- function(df, grain, week, spend_col,
