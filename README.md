@@ -20,13 +20,22 @@ everything else works normally.
 
 ## The flow
 
-1. **Plan** — upload a CSV/Excel plan or load the sample, map the columns to
-   grain / week / spend, add the plan's details, build it.
-2. **Scenarios** — change spend three ways: type in the grid, stage a quick
+1. **Build** — two routes to a plan. *From a sample* loads one of the built-in
+   plans, shows you what it looks like, and builds it; the sample knows its own
+   columns, so there is no mapping to do. *From a file* takes a CSV or Excel
+   plan and asks you to map grain / week (or flight dates) / spend. Either way
+   the result lands in the registry underneath.
+2. **Edit** — change spend three ways: type in the grid, stage a quick
    operation, or ask the assistant. Save the result as a named scenario.
-3. **Compare** — summary table, per-cell table, and four charts.
+3. **Review** — *Plan* shows one plan whole (details, KPIs, a read-only grid,
+   flighting) and is where a plan's status is set; *Compare* puts the scenarios
+   side by side as a summary table, a per-cell table and four charts.
 4. **Export** — a workbook that re-uploads cleanly, or xlsx/CSV of the
    comparison and individual scenarios.
+
+Two halves: tabs where things change (Build, Edit) and tabs where they are read
+(Review, Export). Status is the exception — it is set on Review, because
+approving a plan you cannot see is not a decision.
 
 ## Three ways to edit, one code path
 

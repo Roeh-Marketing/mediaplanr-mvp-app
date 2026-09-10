@@ -186,6 +186,14 @@ plan_grid <- function(plan, baseline = NULL, editable = TRUE) {
     changed_cells(baseline, plan)
   if (!length(edited_keys)) edited_keys <- character(0)
 
+  # Cells a subplan owns. Their number IS the subplan's rollup, and
+  # build_scenario() refuses to touch them -- so offering an editable input here
+  # would be inviting an edit the package is going to reject. Ownership is per
+  # LINE ITEM, not per week (a subplan backs a whole cell), so the subplan keys
+  # are exactly what the grid needs; ownership_map() is the row-level view and
+  # is what ec_ownership() draws.
+  locked_keys <- names(plan@subplans) %||% character(0)
+
   value_col_def <- function(colname) {
     reactable::colDef(
       name  = if (colname == "planned_spend") "Spend" else format_week_header(colname),
@@ -194,12 +202,20 @@ plan_grid <- function(plan, baseline = NULL, editable = TRUE) {
       cell = if (!editable) function(value) fmt_money_short(value) else
         reactable::JS(sprintf("
           function(cellInfo) {
-            var key = cellInfo.row['.li'] + '%s' + '%s';
+            var li  = cellInfo.row['.li'];
+            var key = li + '%s' + '%s';
+            var val = cellInfo.value === null ? 0 : cellInfo.value;
+            if (%s.indexOf(li) !== -1) {
+              return '<span class=\"mp-cell-locked\" title=\"Planned in a subplan. ' +
+                     'Edit the subplan and re-attach it.\">' +
+                     Math.round(val).toLocaleString() + '</span>';
+            }
             var dirty = %s.indexOf(key) !== -1;
             return '<input type=\"number\" class=\"mp-cell' + (dirty ? ' mp-cell-dirty' : '') +
-                   '\" data-key=\"' + key + '\" value=\"' + (cellInfo.value === null ? 0 : cellInfo.value) +
+                   '\" data-key=\"' + key + '\" value=\"' + val +
                    '\" step=\"1000\" min=\"0\">';
-          }", CELL_SEP, colname, jsonlite::toJSON(edited_keys))),
+          }", CELL_SEP, colname, jsonlite::toJSON(locked_keys),
+             jsonlite::toJSON(edited_keys))),
       html = editable
     )
   }
@@ -208,6 +224,13 @@ plan_grid <- function(plan, baseline = NULL, editable = TRUE) {
   for (g in lg) {
     cols[[g]] <- reactable::colDef(
       name = tools::toTitleCase(g), minWidth = 110, sticky = "left",
+      cell = if (!length(locked_keys)) NULL else reactable::JS(sprintf("
+        function(cellInfo) {
+          var owned = %s.indexOf(cellInfo.row['.li']) !== -1;
+          return (owned ? '<span class=\"mp-owned\" title=\"Backed by a subplan\">&#128274;</span> ' : '') +
+                 (cellInfo.value === null ? '' : cellInfo.value);
+        }", jsonlite::toJSON(locked_keys))),
+      html = length(locked_keys) > 0,
       # Opaque: a translucent sticky column lets the scrolling body show
       # through it, which renders as overlapping text.
       style = list(fontWeight = 500, background = STICKY_BG,

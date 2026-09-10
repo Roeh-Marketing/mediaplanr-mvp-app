@@ -24,18 +24,9 @@ sample_plan_df <- function(seed = 42) {
   )
 
   n <- length(weeks)
-  curve <- function(shape) {
-    switch(shape,
-      flat  = rep(1, n),
-      ramp  = seq(0.55, 1.45, length.out = n),
-      front = c(rep(1.5, 4), rep(1.0, 4), rep(0.4, n - 8)),
-      back  = c(rep(0.3, 5), seq(0.8, 1.6, length.out = n - 5)),
-      burst = ifelse(seq_len(n) %in% c(1, 2, 7, 8, 12, 13), 1.8, 0.25)
-    )
-  }
 
   rows <- lapply(spec, function(s) {
-    mult <- curve(s$shape) * stats::runif(n, 0.92, 1.08)
+    mult <- pacing_curve(s$shape, n) * stats::runif(n, 0.92, 1.08)
     data.frame(
       week          = weeks,
       channel       = s$channel,

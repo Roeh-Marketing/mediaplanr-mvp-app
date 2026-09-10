@@ -1,5 +1,5 @@
 nav_panel(
-  title = "Scenarios",
+  title = "Edit",
   layout_sidebar(
     fillable = FALSE,
 
@@ -67,8 +67,9 @@ nav_panel(
       uiOutput("scn_pending_note"),
       textInput("new_name", "Name", placeholder = "required"),
       textInput("new_nickname", "Nickname", placeholder = "e.g. TV -20%"),
-      selectInput("new_status", "Status",
-                  choices = c("in development", "to review", "approved")),
+      div(class = "form-text mb-2",
+          "A new scenario starts ", tags$i("in development"),
+          " — promote it on the Review page."),
       layout_columns(
         col_widths = c(7, 5),
         actionButton("scn_save", "Save scenario", icon = icon("code-branch"),
@@ -79,7 +80,7 @@ nav_panel(
     ),
 
     # ------------------------------------------------------------------
-    # Main: the grid, then the chat
+    # Main: the grid, then the ways in to the assistant
     # ------------------------------------------------------------------
     card(
       full_screen = TRUE,
@@ -97,12 +98,11 @@ nav_panel(
       )
     ),
 
-    card(
-      full_screen = TRUE,
-      height = "460px",
-      card_header(icon("robot"), " Ask for a change",
-                  class = "bg-primary text-white"),
-      chat_ui("plan_chat", height = "100%", fill = TRUE, enable_cancel = TRUE)
-    )
+    # The assistant used to sit here as a third card. It is now a drawer on the
+    # navbar, reachable from every page, so a plan explained while designing it
+    # is still in the same conversation when you come here to edit it.
+    div(class = "mt-3 d-flex flex-wrap align-items-center gap-2",
+        span(class = "small text-muted", "Or ask the assistant:"),
+        skills_strip("edit"))
   )
 )

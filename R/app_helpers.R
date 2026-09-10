@@ -167,3 +167,169 @@ make_chat_plot_saver <- function(session) {
     paste0(prefix, "/", fn)
   }
 }
+
+# ---------------------------------------------------------------------------
+# KPI strip.
+#
+# One definition, three callers (Build's registry, Review's preview, Compare).
+# It used to be a local `kpi()` copied into each server module, which is how the
+# Plan page and the Compare page ended up with the same card rendered from two
+# places.
+# ---------------------------------------------------------------------------
+
+kpi_card <- function(label, value, sub = NULL) {
+  card(class = "border-0 shadow-sm",
+       card_body(class = "py-3",
+                 div(class = "kpi-label", label),
+                 div(class = "kpi-value", value),
+                 if (!is.null(sub)) div(class = "small text-muted", sub)))
+}
+
+# The four (or five) numbers that describe one plan. "Weeks" was a count of the
+# storage grain; the in-market window is what a planner actually asks, and it is
+# the plan's own extent, so it stays true however the plan was authored.
+plan_kpi_strip <- function(p) {
+  d  <- p@data
+  lg <- setdiff(mediaplanr::line_item_grain(p), mediaplanr::flight_cols())
+  li <- length(unique(mediaplanr::line_item(d, lg)))
+  fl <- nrow(mediaplanr::flights(p))
+  win <- mediaplanr::flight_window(p)
+
+  in_market <- if (length(win)) {
+    kpi_card("In market",
+             paste0(format(win[["start"]], "%d %b"), " - ", format(win[["end"]], "%d %b")),
+             paste0(p@flight_days, " days",
+                    if (!is.na(mediaplanr::week_start(p)))
+                      paste0(" - ", mediaplanr::week_start(p), " weeks") else ""))
+  } else {
+    kpi_card("In market", "—", "no time dimension")
+  }
+
+  # Only shown when the plan records them, in the same "omit rather than show
+  # empty" spirit the package's own print method uses.
+  units_kpi <- NULL
+  if (all(c("unit_type", "planned_units") %in% names(d))) {
+    ok <- !is.na(d$unit_type) & !is.na(d$planned_units)
+    if (any(ok)) {
+      ut  <- as.character(d$unit_type)[ok]
+      tot <- tapply(d$planned_units[ok], ut, sum)
+      big <- names(tot)[which.max(tot)]
+      sp  <- sum(d$planned_spend[ok & d$unit_type == big])
+      per <- if (tolower(big) %in% c("impression", "impressions")) 1000 else 1
+      units_kpi <- kpi_card(
+        tools::toTitleCase(big),
+        fmt_units(tot[[big]]),
+        paste0(fmt_rate(sp / tot[[big]] * per), if (per == 1000) " CPM" else " each"))
+    }
+  }
+
+  cells <- c(list(
+    kpi_card("Total planned", fmt_money(sum(d$planned_spend))),
+    kpi_card("Line items", li,
+             if (fl) paste0(fl, " flight", if (fl == 1) "" else "s") else NULL),
+    in_market,
+    kpi_card("Rows", nrow(d))), if (!is.null(units_kpi)) list(units_kpi))
+  n <- length(cells)
+  do.call(layout_columns,
+          c(list(col_widths = if (n == 5) c(3, 2, 3, 1, 3) else c(3, 3, 3, 3)), cells))
+}
+
+# ---------------------------------------------------------------------------
+# Build-page tables.
+# ---------------------------------------------------------------------------
+
+# The file (or sample) exactly as read, before any mapping is applied. This is
+# what tells the user what they just loaded, so it sits at the TOP of the build
+# flow rather than under the outputs it explains.
+raw_preview_table <- function(df, n = 10) {
+  reactable::reactable(utils::head(df, n), compact = TRUE, bordered = TRUE,
+                       pagination = FALSE, wrap = FALSE,
+                       style = list(fontSize = "0.78rem"))
+}
+
+# The parsed outline, one row per line item.
+#
+# This is what carries the outline format: the textarea is terse, and this is
+# where a planner sees that TV -> {NBC, ESPN} plus Search -> {Google} is three
+# line items and not six, and what each one was actually given.
+outline_table <- function(o) {
+  if (!nrow(o)) {
+    return(reactable::reactable(o, compact = TRUE, bordered = TRUE,
+                                pagination = FALSE))
+  }
+  cols <- list(
+    amount = reactable::colDef(name = "Amount", align = "right",
+                               cell = function(v) fmt_money(v)),
+    # Not fmt_pct(): that signs its output for deltas against a baseline, and
+    # a share of the total is not a change in anything.
+    share  = reactable::colDef(name = "Share", align = "right",
+                               cell = function(v) {
+                                 if (is.na(v)) "-" else sprintf("%.1f%%", v * 100)
+                               }),
+    pacing = reactable::colDef(name = "Pacing"),
+    weeks  = reactable::colDef(name = "Weeks", align = "right")
+  )
+  reactable::reactable(o, compact = TRUE, bordered = TRUE, pagination = FALSE,
+                       wrap = FALSE, columns = cols,
+                       style = list(fontSize = "0.78rem"))
+}
+
+# What is in the session, one row per scenario, with its metadata rather than
+# just its spend -- the plan's identity (advertiser, planner) is what someone
+# scanning the registry is looking for.
+#
+# Status renders as a <select class="mp-status">; www/grid.js delegates its
+# change event to `input$registry_status`, the same shim the editable grid uses.
+registry_table <- function(set, base_name = NULL) {
+  nms <- names(set@scenarios)
+  s   <- mediaplanr::compare_scenarios(set, "summary")
+  s   <- s[match(nms, s$scenario), , drop = FALSE]
+  get <- function(f) vapply(set@scenarios[nms], f, character(1))
+
+  tbl <- data.frame(
+    Scenario   = nms,
+    Name       = get(function(p) p@name),
+    Nickname   = get(function(p) p@nickname),
+    Advertiser = get(function(p) p@advertiser),
+    Planner    = get(function(p) p@planner),
+    Status     = get(function(p) p@status),
+    Spend      = s$total_planned_spend,
+    Rows       = vapply(set@scenarios[nms], function(p) nrow(p@data), integer(1)),
+    Lineage    = ifelse(nms == (base_name %||% set@base_name), "baseline", "derived"),
+    stringsAsFactors = FALSE, check.names = FALSE)
+  # vapply() over a named list returns a NAMED vector, which data.frame() turns
+  # into row names -- and reactable shows row names whenever it finds them, so
+  # without this the table grows a nameless leading column of scenario labels.
+  rownames(tbl) <- NULL
+
+  levels_js <- jsonlite::toJSON(mediaplanr::status_levels())
+
+  reactable::reactable(
+    tbl, compact = TRUE, bordered = TRUE, highlight = TRUE, pagination = FALSE,
+    columns = list(
+      Scenario   = reactable::colDef(minWidth = 130, style = list(fontWeight = 600)),
+      Name       = reactable::colDef(minWidth = 160),
+      Nickname   = reactable::colDef(minWidth = 110,
+                                     style = list(color = "#6c757d")),
+      Advertiser = reactable::colDef(minWidth = 110),
+      Planner    = reactable::colDef(minWidth = 100),
+      Status     = reactable::colDef(minWidth = 150, html = TRUE,
+        cell = reactable::JS(sprintf("
+          function(cellInfo) {
+            var levels = %s;
+            var opts = levels.map(function (l) {
+              return '<option value=\"' + l + '\"' +
+                     (l === cellInfo.value ? ' selected' : '') + '>' + l + '</option>';
+            }).join('');
+            return '<select class=\"mp-status\" data-scenario=\"' +
+                   cellInfo.row['Scenario'] + '\">' + opts + '</select>';
+          }", levels_js))),
+      Spend      = reactable::colDef(align = "right", minWidth = 110,
+                                     cell = function(v) fmt_money(v)),
+      Rows       = reactable::colDef(align = "right", minWidth = 70),
+      Lineage    = reactable::colDef(minWidth = 90, cell = function(v) {
+        htmltools::tags$span(class = "small text-muted", v)
+      })
+    ),
+    style = list(fontSize = "0.82rem"))
+}

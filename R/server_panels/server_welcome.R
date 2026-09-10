@@ -4,18 +4,21 @@
 
 server_welcome <- function(input, output, session, st, bump, uploaded) {
 
+  # Both buttons land on Build, on the subtab that matches what was asked for.
+  # The sample itself is loaded by server_build's own observer, so there is one
+  # definition of what "the sample" is rather than two that can drift.
   observeEvent(input$welcome_load_sample, {
-    uploaded(list(name = "Q2 2026 Media Plan",
-                  sheets = stats::setNames(list(sample_plan_df()), "baseline")))
-    updateTextInput(session, "meta_name", value = "Q2 2026 Media Plan")
-    updateTextInput(session, "meta_nickname", value = "baseline")
-    updateTextInput(session, "meta_advertiser", value = "Acme Corp")
-    nav_select("main_nav", "Plan")
-    showNotification("Sample loaded — the mapping is pre-filled, press Build plan.",
+    load_sample(session, uploaded, "weekly")
+    nav_select("main_nav", "Build")
+    nav_select("build_mode", "From a sample")
+    showNotification("Sample loaded — check the preview, then Build plan.",
                      type = "message", duration = 6)
   })
 
-  observeEvent(input$welcome_goto_plan, nav_select("main_nav", "Plan"))
+  observeEvent(input$welcome_goto_plan, {
+    nav_select("main_nav", "Build")
+    nav_select("build_mode", "From a file")
+  })
 
   output$welcome_hint <- renderUI({
     bump()

@@ -59,7 +59,7 @@
 # column's distinct values in the column's own type, which is precisely what an
 # edit `target` accepts.
 describe_plan_tool <- function(st, scenario = NULL) .try({
-  if (!store_has_plan(st)) return(.err("No plan loaded. Ask the user to load one on the Plan page."))
+  if (!store_has_plan(st)) return(.err("No plan loaded. Ask the user to load one on the Build tab."))
   p  <- store_get(st, scenario)
   d  <- p@data
   lg <- setdiff(mediaplanr::line_item_grain(p), mediaplanr::flight_cols())
@@ -191,14 +191,9 @@ set_status_tool <- function(st, scenario, status) .try({
     return(.err("status must be one of: ",
                 paste(mediaplanr::status_levels(), collapse = ", ")))
   }
-  p <- store_get(st, scenario)
-  updated <- mediaplanr::MediaPlan(
-    data = p@data, grain = p@grain, week_col = p@week_col,
-    id = p@id, parent_id = p@parent_id, name = p@name,
-    nickname = p@nickname, advertiser = p@advertiser, planner = p@planner,
-    status = status, objective = p@objective
-  )
-  store_replace(st, scenario, updated)
+  # store_set_status() is what the Review page calls too, so the assistant and
+  # the user promote a scenario through exactly the same code.
+  store_set_status(st, scenario %||% st$active, status)
   .ok(scenario = scenario, status = status)
 })
 
@@ -266,4 +261,190 @@ plot_comparison_tool <- function(st, which = "totals", scenario = NULL) .try({
                 else "the plan has no week column."))
   }
   .plot_content(p, chart = which, scenarios = names(st$set@scenarios))
+})
+
+# --- designing a plan -------------------------------------------------------
+#
+# The Build form and the chat are two views of ONE recipe. The form syncs its
+# state into `st$scaffold` on every change, so `get_scaffold` always reads what
+# is on screen; `set_scaffold` writes back through store_set_scaffold(), whose
+# counter is what tells the form to pull the change into its inputs.
+#
+# The guardrail here is MECHANICAL, not just prose in the prompt: no tool below
+# accepts a per-week or per-line-item spend figure. `budget.total` and a node's
+# `amount` are the only doors an absolute number can come through, and every
+# other figure in the plan is computed by allocate_tree() in R. A model cannot
+# write a weekly number here even if it tries.
+
+list_skills_tool <- function() .try(.ok(skills = skills_for_tool()))
+
+suggest_dimensions_tool <- function() .try({
+  .ok(suggested = DIMENSION_SUGGESTIONS,
+      note = paste("Suggestions only. Any column name is valid -- the package",
+                   "privileges none, and plans keyed on media_type or vehicle",
+                   "are equally correct. Ask what the planner actually uses."),
+      unit_types = mediaplanr::unit_type_levels(),
+      pacing     = pacing_shapes())
+})
+
+.scaffold_report <- function(st, recipe, changed = NULL) {
+  leaves <- tree_leaves(recipe$tree %||% list(),
+                        recipe$dimensions %||% character(0))
+  probs  <- tryCatch(scaffold_problems(recipe), error = function(e) conditionMessage(e))
+  .ok(dimensions = recipe$dimensions %||% character(0),
+      outline    = format_tree_text(recipe$tree %||% list(),
+                                    recipe$dimensions %||% character(0)),
+      line_items = nrow(leaves),
+      time       = recipe$time,
+      allocation = scaffold_rules(recipe),
+      changed    = changed,
+      problems   = probs,
+      missing    = scaffold_missing(recipe),
+      ready      = !length(probs),
+      note = paste("Amounts are computed by R, not stated here. Call",
+                   "preview_scaffold to see what each line item gets; do not",
+                   "quote spend figures before that."))
+}
+
+get_scaffold_tool <- function(st) .try({
+  r <- st$scaffold %||% new_recipe()
+  .scaffold_report(st, r)
+})
+
+set_scaffold_tool <- function(st, patch_json) .try({
+  patch <- tryCatch(
+    jsonlite::fromJSON(patch_json, simplifyVector = FALSE),
+    error = function(e) e)
+  if (inherits(patch, "error")) {
+    return(.err("patch_json is not valid JSON: ", conditionMessage(patch)))
+  }
+  if (!is.list(patch) || is.null(names(patch))) {
+    return(.err("patch_json must be a JSON object, e.g. {\"budget\":{\"total\":2000000}}."))
+  }
+
+  r <- merge_scaffold(st$scaffold %||% new_recipe(), patch)
+
+  # `dimensions` arrives from JSON as a list; everything downstream wants a
+  # character vector, and a list would silently break the grain.
+  if (!is.null(r$dimensions)) r$dimensions <- as.character(unlist(r$dimensions))
+
+  store_set_scaffold(st, r)
+  .scaffold_report(st, r, changed = names(patch))
+})
+
+# The only place spend figures may come from. Read-only: it builds nothing.
+preview_scaffold_tool <- function(st) .try({
+  r <- st$scaffold %||% new_recipe()
+  probs <- scaffold_problems(r)
+  if (length(probs)) {
+    return(.err("The recipe is not complete yet: ", paste(probs, collapse = " ")))
+  }
+  o <- tree_outline(r)
+  basis <- r$time$basis %||% "weekly"
+  .ok(line_items = nrow(o),
+      rows       = if (identical(basis, "weekly")) sum(o$weeks) else nrow(o),
+      total      = sum(o$amount),
+      items      = lapply(seq_len(nrow(o)), function(i) as.list(o[i, ])))
+})
+
+build_from_scaffold_tool <- function(st, name = NULL, nickname = NULL) .try({
+  r <- st$scaffold %||% new_recipe()
+  if (!is.null(name) && nzchar(name)) r$meta$name <- name
+  if (!is.null(nickname) && nzchar(nickname)) r$meta$nickname <- nickname
+
+  probs <- scaffold_problems(r)
+  if (length(probs)) {
+    return(.err("Cannot build yet: ", paste(probs, collapse = " ")))
+  }
+  if (!nzchar(r$meta$name %||% "")) return(.err("A plan name is required."))
+
+  store_set_scaffold(st, r)
+
+  p <- build_from_recipe(r)
+
+  # A recipe seeded for a cell attaches to that cell instead of replacing the
+  # session. Same form, same build; what differs is where the result lands.
+  tgt <- st$subplan_target
+  if (!is.null(tgt)) {
+    store_attach_subplan(st, tgt$parent, p)
+    st$subplan_target <- NULL
+    parent <- store_get(st, tgt$parent)
+    return(.ok(attached = tgt$key, parent = tgt$parent,
+               subplans = names(parent@subplans),
+               parent_total = sum(parent@data[["planned_spend"]]),
+               note = paste("The cell is now backed by this subplan and is",
+                            "read-only on the parent. Its number is the",
+                            "subplan's rollup.")))
+  }
+
+  store_init(st, p)
+  .ok(built = r$meta$name, scenario = st$active,
+      line_items = nrow(tree_outline(r)), rows = nrow(p@data),
+      total = sum(p@data[["planned_spend"]]),
+      note = "It is in the registry on the Build page, and ready to edit.")
+})
+
+
+# --- structure --------------------------------------------------------------
+#
+# A subplan lives inside a plan, so none of this forks a scenario: attaching
+# changes the parent in place and locks the cell it backs. That is why these go
+# through store_attach_subplan() / store_detach_subplan() rather than anything
+# that mints an id.
+
+plan_structure_tool <- function(st, scenario = NULL) .try({
+  if (!store_has_plan(st)) return(.err("No plan loaded yet."))
+  p <- store_get(st, scenario)
+  m <- mediaplanr::subplan_map(p)
+  own <- if (length(p@subplans)) {
+    o <- mediaplanr::ownership_map(p)
+    list(locked_cells = unique(o$key[o$locked]),
+         editable_cells = unique(o$key[!o$locked]))
+  } else {
+    list(locked_cells = character(0),
+         editable_cells = unique(mediaplanr::line_item(
+           p@data, setdiff(mediaplanr::line_item_grain(p),
+                           mediaplanr::flight_cols()))))
+  }
+  .ok(plan = p@name, is_topline = mediaplanr::is_topline(p),
+      subplans = names(p@subplans) %||% character(0),
+      tree = lapply(seq_len(nrow(m)), function(i) as.list(m[i, ])),
+      locked_cells = own$locked_cells,
+      editable_cells = own$editable_cells,
+      note = paste("Cells a subplan backs are read-only on the parent:",
+                   "their number is the subplan's rollup. Edit the subplan",
+                   "and re-attach rather than editing the parent."))
+})
+
+detach_subplan_tool <- function(st, key, scenario = NULL) .try({
+  if (!store_has_plan(st)) return(.err("No plan loaded yet."))
+  nm <- scenario %||% st$active %||% st$set@base_name
+  p  <- store_get(st, nm)
+  if (!key %in% names(p@subplans)) {
+    return(.err("'", key, "' is not backed by a subplan. Attached: ",
+                if (length(p@subplans)) paste(names(p@subplans), collapse = ", ")
+                else "none", "."))
+  }
+  store_detach_subplan(st, nm, key)
+  .ok(detached = key, plan = nm,
+      remaining = names(store_get(st, nm)@subplans) %||% character(0),
+      note = "The cell keeps the numbers the subplan gave it, and is editable again.")
+})
+
+# Author a subplan for one cell, from the same recipe shape the Design form
+# uses. The seed is taken FROM the parent -- its grain, its cell values, its
+# calendar -- so a subplan cannot be built that would not attach.
+seed_subplan_tool <- function(st, key, scenario = NULL) .try({
+  if (!store_has_plan(st)) return(.err("No plan loaded yet."))
+  nm <- scenario %||% st$active %||% st$set@base_name
+  p  <- store_get(st, nm)
+  r  <- subplan_seed_recipe(p, key)
+  store_set_scaffold(st, r)
+  st$subplan_target <- list(parent = nm, key = key)
+  c(.scaffold_report(st, r),
+    list(subplan_for = key, parent = nm,
+         note = paste("The Design form now holds a subplan for", key,
+                      "at the parent's own grain. Refine it by adding a finer",
+                      "dimension and splitting the cell beneath it, then call",
+                      "build_from_scaffold to attach it.")))
 })

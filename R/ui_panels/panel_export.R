@@ -18,10 +18,28 @@ nav_panel(
           "colleague, let them edit it in Excel, and upload it straight back — ",
           "each sheet returns as a scenario, with the sheet name as its nickname."),
         checkboxInput("exp_wb_selected_only",
-                      "Only the scenarios ticked on the Compare page", FALSE),
+                      "Only the scenarios ticked on the Review \u2192 Compare page", FALSE),
         uiOutput("exp_wb_note"),
         downloadButton("exp_workbook", "Download workbook (.xlsx)",
                        class = "btn-primary")
+      )
+    ),
+
+    # The workbook is flat by construction -- a sheet is a table, and a table
+    # cannot hold a tree. Once a plan has subplans, xlsx is a lossy export and
+    # saying so here is better than letting someone discover it on re-upload.
+    card(
+      class = "mt-3",
+      card_header(icon("code"), " JSON — the whole set, losslessly"),
+      card_body(
+        p(class = "small text-muted mb-2",
+          "Everything the workbook cannot carry: subplan trees, lineage, ",
+          "revisions and status, in the schema ", tags$code("mediaplanr"),
+          " reads back with ", tags$code("plan_from_json()"), ". Use this ",
+          "whenever a plan has detail plans hanging off it."),
+        uiOutput("exp_json_note"),
+        downloadButton("exp_json", "Download set (.json)",
+                       class = "btn-outline-primary")
       )
     ),
 

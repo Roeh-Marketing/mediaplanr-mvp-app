@@ -15,12 +15,13 @@ nav_panel(
         card_body(
           tags$ol(
             class = "mb-0 ps-3",
-            tags$li(tags$b("Plan"), " — upload a CSV or Excel plan (or load the sample), ",
-                    "map the columns, and build a validated plan."),
-            tags$li(tags$b("Scenarios"), " — edit spend in a spreadsheet-style grid, ",
+            tags$li(tags$b("Build"), " — start from a sample, or upload a CSV or ",
+                    "Excel plan and map its columns."),
+            tags$li(tags$b("Edit"), " — change spend in a spreadsheet-style grid, ",
                     "with quick operations or by asking the assistant. ",
                     "Save the result as a named scenario."),
-            tags$li(tags$b("Compare"), " — see the scenarios side by side as tables and charts."),
+            tags$li(tags$b("Review"), " — one plan at a time, or every scenario ",
+                    "side by side. Where a plan is approved."),
             tags$li(tags$b("Export"), " — download what you need.")
           )
         )
@@ -43,8 +44,8 @@ nav_panel(
                     "which plan it came from."),
             tags$dt("Status"),
             tags$dd(class = "mb-0 text-muted",
-                    "in development → to review → approved. A scenario forked from an ",
-                    "approved plan is never itself approved.")
+                    "in development → to review → approved. Set it on the ",
+                    tags$b("Review"), " page, once you can see what you are approving.")
           )
         )
       )
